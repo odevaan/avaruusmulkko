@@ -76,13 +76,14 @@ fun AstroViewModeScreen(
     val currentFile = fileList.getOrNull(currentIndex.coerceIn(0, fileList.size - 1)) ?: fileList.first()
 
     var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var stretchedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var arcsinhBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var boostBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var histogramData by remember { mutableStateOf<HistogramData?>(null) }
     var metadata by remember { mutableStateOf<DngMetadata?>(null) }
     var isLoading by remember { mutableStateOf(true) }
 
     // Display adjustments (only affects on-screen display, does not touch saved files)
-    var isAutoStretched by remember { mutableStateOf(true) } // default ON for astrophotography inspection!
+    var stretchMode by remember { mutableStateOf(AstroStretchMode.ARCSINH) } // Default ARCSINH: brings out dim nebulae without highlight blowout!
     var rotationAngle by remember { mutableFloatStateOf(0f) }
     var showHistogram by remember { mutableStateOf(true) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
@@ -103,20 +104,36 @@ fun AstroViewModeScreen(
         withContext(Dispatchers.IO) {
             val meta = DngThumbnailLoader.extractMetadata(currentFile)
             val bmp = DngThumbnailLoader.loadBitmap(currentFile, maxDim = 3840)
-            val hist = if (bmp != null) DngThumbnailLoader.computeHistogram(bmp) else null
-            val stretched = if (bmp != null) DngThumbnailLoader.createAutoStretchedBitmap(bmp) else null
+            val arcsinhBmp = if (bmp != null) DngThumbnailLoader.createStretchedBitmap(bmp, AstroStretchMode.ARCSINH) else null
+            val boostBmp = if (bmp != null) DngThumbnailLoader.createStretchedBitmap(bmp, AstroStretchMode.BOOST) else null
 
             withContext(Dispatchers.Main) {
                 metadata = meta
                 originalBitmap = bmp
-                stretchedBitmap = stretched
-                histogramData = hist
+                arcsinhBitmap = arcsinhBmp
+                boostBitmap = boostBmp
                 isLoading = false
             }
         }
     }
 
-    val displayedBitmap = if (isAutoStretched && stretchedBitmap != null) stretchedBitmap else originalBitmap
+    val displayedBitmap = when (stretchMode) {
+        AstroStretchMode.ARCSINH -> arcsinhBitmap ?: originalBitmap
+        AstroStretchMode.BOOST -> boostBitmap ?: originalBitmap
+        AstroStretchMode.OFF -> originalBitmap
+    }
+
+    // Dynamically recalculate histogram whenever displayedBitmap changes
+    LaunchedEffect(displayedBitmap) {
+        displayedBitmap?.let { bmp ->
+            withContext(Dispatchers.IO) {
+                val hist = DngThumbnailLoader.computeHistogram(bmp)
+                withContext(Dispatchers.Main) {
+                    histogramData = hist
+                }
+            }
+        }
+    }
 
     Box(
         modifier = modifier
@@ -254,25 +271,43 @@ fun AstroViewModeScreen(
             ) {
                 // Auto-Stretch Dynamic Range Toggle Button
                 Button(
-                    onClick = { isAutoStretched = !isAutoStretched },
+                    onClick = {
+                        stretchMode = when (stretchMode) {
+                            AstroStretchMode.ARCSINH -> AstroStretchMode.BOOST
+                            AstroStretchMode.BOOST -> AstroStretchMode.OFF
+                            AstroStretchMode.OFF -> AstroStretchMode.ARCSINH
+                        }
+                    },
                     modifier = Modifier
-                        .weight(1.3f)
+                        .weight(1.35f)
                         .height(44.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isAutoStretched) AstroRedDark else AstroSurfaceElevated
+                        containerColor = when (stretchMode) {
+                            AstroStretchMode.ARCSINH -> AstroRedDark
+                            AstroStretchMode.BOOST -> AstroRed
+                            AstroStretchMode.OFF -> AstroSurfaceElevated
+                        }
                     ),
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 4.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.AutoFixHigh,
+                        imageVector = when (stretchMode) {
+                            AstroStretchMode.ARCSINH -> Icons.Default.AutoFixHigh
+                            AstroStretchMode.BOOST -> Icons.Default.Tune
+                            AstroStretchMode.OFF -> Icons.Default.FilterVintage
+                        },
                         contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (isAutoStretched) "STRETCH: ON" else "STRETCH: OFF",
+                        text = when (stretchMode) {
+                            AstroStretchMode.ARCSINH -> "ARCSINH"
+                            AstroStretchMode.BOOST -> "BOOST"
+                            AstroStretchMode.OFF -> "LINEAR"
+                        },
                         color = Color.White,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
@@ -362,7 +397,11 @@ fun AstroViewModeScreen(
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
-                            text = if (isAutoStretched) "Display: Stretched" else "Display: Linear",
+                            text = when (stretchMode) {
+                                AstroStretchMode.ARCSINH -> "Display: Arcsinh (Protected Highlights)"
+                                AstroStretchMode.BOOST -> "Display: Deep Boost"
+                                AstroStretchMode.OFF -> "Display: Linear"
+                            },
                             color = AstroTextSecondary,
                             fontSize = 11.sp
                         )

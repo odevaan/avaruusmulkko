@@ -83,4 +83,13 @@ class AstroLogicTest {
         assertNull(AstroMode.FOCUS.frameType)
         assertNull(AstroMode.VIEW.frameType)
     }
+
+    @Test
+    fun testAstroStretchModes() {
+        val modes = com.avaruus.astro.ui.AstroStretchMode.values()
+        assertEquals(3, modes.size)
+        assertEquals("ARCSINH", com.avaruus.astro.ui.AstroStretchMode.ARCSINH.label)
+        assertEquals("BOOST", com.avaruus.astro.ui.AstroStretchMode.BOOST.label)
+        assertEquals("LINEAR", com.avaruus.astro.ui.AstroStretchMode.OFF.label)
+    }
 }
