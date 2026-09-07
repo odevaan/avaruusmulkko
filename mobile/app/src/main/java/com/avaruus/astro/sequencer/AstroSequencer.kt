@@ -137,6 +137,7 @@ class AstroSequencer(
                 isRunning = false,
                 statusMessage = "Sequence completed: $index frames captured."
             )
+            playCompletionSound()
         } catch (e: CancellationException) {
             _state.value = _state.value.copy(
                 isRunning = false,
@@ -163,6 +164,20 @@ class AstroSequencer(
         sequencerJob?.cancel()
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
+        }
+    }
+
+    private fun playCompletionSound() {
+        try {
+            val resId = context.resources.getIdentifier("kuva_valmis", "raw", context.packageName)
+            if (resId != 0) {
+                val mp = android.media.MediaPlayer.create(context, resId)
+                mp?.setOnCompletionListener { it.release() }
+                mp?.start()
+                Log.i(TAG, "Played sequence completion chime")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to play completion sound", e)
         }
     }
 }

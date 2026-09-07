@@ -71,6 +71,23 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                val isCapturing by viewModel.isCapturing.collectAsState()
+
+                DisposableEffect(isCapturing) {
+                    val lp = window.attributes
+                    if (isCapturing) {
+                        lp.screenBrightness = 0.01f
+                    } else {
+                        lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    }
+                    window.attributes = lp
+                    onDispose {
+                        val resetLp = window.attributes
+                        resetLp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                        window.attributes = resetLp
+                    }
+                }
+
                 if (permissionsGranted) {
                     AstroCameraScreen(viewModel = viewModel)
                 } else {

@@ -6,7 +6,7 @@ from art/avaruusmulkko.jpg.
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageOps
 
-ART_PATH = Path("art/avaruusmulkko.jpg")
+ART_PATH = Path("art/mulkko.jpg")
 RES_DIR = Path("mobile/app/src/main/res")
 
 DENSITIES = {
