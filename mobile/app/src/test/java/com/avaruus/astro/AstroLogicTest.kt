@@ -29,6 +29,7 @@ class AstroLogicTest {
         val mainLens = CameraLens(
             id = "0",
             name = "1.0x Main Wide (50MP ƒ/1.68)",
+            opticalZoom = "1.0x",
             focalLengthMm = 6.9f,
             aperture = 1.68f,
             maxExposureNs = 16_000_000_000L,
@@ -41,6 +42,7 @@ class AstroLogicTest {
             rawHeight = 6120
         )
 
+        assertEquals("1.0x", mainLens.opticalZoom)
         assertEquals(16.0, mainLens.maxExposureSec, 0.001)
         assertTrue(mainLens.isRawSupported)
         assertEquals(50, mainLens.minIso)

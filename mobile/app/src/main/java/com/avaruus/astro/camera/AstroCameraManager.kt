@@ -108,16 +108,23 @@ class AstroCameraManager(private val context: Context) {
                     val minIso = isoRange?.lower ?: 50
                     val maxIso = isoRange?.upper ?: 6400
 
+                    val opticalZoom = when {
+                        focalLength < 3.5f -> "0.5x"
+                        focalLength in 3.5f..10.0f -> "1.0x"
+                        else -> "5.0x"
+                    }
+
                     val lensName = when {
-                        focalLength < 3.5f -> "0.5x Ultra-Wide (ƒ/${"%.1f".format(aperture)})"
-                        focalLength in 3.5f..10.0f -> "1.0x Main Wide (ƒ/${"%.2f".format(aperture)})"
-                        else -> "5.0x Telephoto (ƒ/${"%.1f".format(aperture)})"
+                        focalLength < 3.5f -> "0.5x Ultra-Wide (48MP ƒ/${"%.1f".format(aperture)})"
+                        focalLength in 3.5f..10.0f -> "1.0x Main Wide (50MP ƒ/${"%.2f".format(aperture)})"
+                        else -> "5.0x Telephoto (48MP ƒ/${"%.1f".format(aperture)})"
                     }
 
                     lenses.add(
                         CameraLens(
                             id = id,
                             name = lensName,
+                            opticalZoom = opticalZoom,
                             focalLengthMm = focalLength,
                             aperture = aperture,
                             maxExposureNs = maxExp,

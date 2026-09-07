@@ -6,6 +6,7 @@ package com.avaruus.astro.camera
 data class CameraLens(
     val id: String,
     val name: String,
+    val opticalZoom: String = "1.0x",
     val focalLengthMm: Float,
     val aperture: Float,
     val maxExposureNs: Long,

@@ -43,6 +43,7 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
 
     var isUiMinimized by remember { mutableStateOf(false) }
     var modeDropdownExpanded by remember { mutableStateOf(false) }
+    var cameraDropdownExpanded by remember { mutableStateOf(false) }
     var userTemporarilyWokeDimmer by remember { mutableStateOf(false) }
 
     // Sliders state
@@ -252,51 +253,93 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                         }
                     }
 
-                    // Lens Selection Pills: [ 0.5x ] [ 1.0x ] [ 5.0x ]
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        availableLenses.forEach { lens ->
-                            val isSel = currentLens?.id == lens.id
-                            val shortName = when {
-                                lens.focalLengthMm < 3.5f -> "0.5x"
-                                lens.focalLengthMm in 3.5f..10.0f -> "1.0x"
-                                else -> "5.0x"
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isSel) AstroRedDark else AstroSurface)
-                                    .border(1.dp, if (isSel) AstroRed else AstroTextDim, RoundedCornerShape(6.dp))
-                                    .clickable { viewModel.selectLens(lens) }
-                                    .padding(horizontal = 10.dp, vertical = 8.dp)
-                            ) {
-                                Text(
-                                    text = shortName,
-                                    fontSize = 15.sp,
-                                    color = if (isSel) Color.White else AstroTextPrimary,
-                                    fontWeight = FontWeight.Bold
+                    // Camera / Optical Zoom Dropdown Menu (No digital zoom, optical range only)
+                    Box {
+                        val activeLens = currentLens
+                        val label = activeLens?.let { "${it.opticalZoom} OPTICAL ▼" } ?: "CAMERA ▼"
+                        Button(
+                            onClick = { cameraDropdownExpanded = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = AstroSurfaceElevated),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(44.dp)
+                        ) {
+                            Icon(Icons.Default.CameraAlt, contentDescription = null, tint = AstroRed, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = label,
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = cameraDropdownExpanded,
+                            onDismissRequest = { cameraDropdownExpanded = false },
+                            modifier = Modifier
+                                .background(AstroSurfaceElevated)
+                                .border(1.dp, AstroRed, RoundedCornerShape(8.dp))
+                        ) {
+                            availableLenses.forEach { lens ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column {
+                                                Text(
+                                                    text = "${lens.opticalZoom} Optical Zoom",
+                                                    color = if (currentLens?.id == lens.id) AstroRed else Color.White,
+                                                    fontSize = 16.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Text(
+                                                    text = lens.name,
+                                                    color = AstroTextSecondary,
+                                                    fontSize = 13.sp
+                                                )
+                                            }
+                                            if (currentLens?.id == lens.id) {
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                Text("✓", color = AstroRed, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    },
+                                    onClick = {
+                                        viewModel.selectLens(lens)
+                                        cameraDropdownExpanded = false
+                                    }
                                 )
+                                if (lens != availableLenses.last()) {
+                                    HorizontalDivider(color = AstroSurface)
+                                }
                             }
                         }
                     }
 
-                    // Loupe Pills: [ 1x | 5x | 10x ]
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf(1.0f, 5.0f, 10.0f).forEach { zoom ->
-                            val isSel = settings.zoomFactor == zoom
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isSel) AstroRedDark else AstroSurface)
-                                    .border(1.dp, if (isSel) AstroRed else AstroTextDim, RoundedCornerShape(6.dp))
-                                    .clickable { viewModel.setZoomLoupe(zoom) }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = "${zoom.toInt()}x",
-                                    color = if (isSel) Color.White else AstroTextPrimary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                    // In FOCUS mode only, show Loupe for manual star focus assist
+                    if (settings.mode == AstroMode.FOCUS) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf(1.0f, 5.0f, 10.0f).forEach { zoom ->
+                                val isSel = settings.zoomFactor == zoom
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (isSel) AstroRedDark else AstroSurface)
+                                        .border(1.dp, if (isSel) AstroRed else AstroTextDim, RoundedCornerShape(6.dp))
+                                        .clickable { viewModel.setZoomLoupe(zoom) }
+                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = "${zoom.toInt()}x",
+                                        color = if (isSel) Color.White else AstroTextPrimary,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
                     }
