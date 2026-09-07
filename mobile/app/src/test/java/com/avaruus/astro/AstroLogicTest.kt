@@ -28,7 +28,8 @@ class AstroLogicTest {
     fun testCameraLensCalculations() {
         val mainLens = CameraLens(
             id = "0",
-            name = "1.0x Main Wide (50MP ƒ/1.68)",
+            name = "1.0x 50MP f/1.68",
+            opticalZoomRatio = 1.0f,
             opticalZoom = "1.0x",
             focalLengthMm = 6.9f,
             aperture = 1.68f,
@@ -43,11 +44,26 @@ class AstroLogicTest {
         )
 
         assertEquals("1.0x", mainLens.opticalZoom)
+        assertEquals("1.0x 50MP f/1.68", mainLens.name)
         assertEquals(16.0, mainLens.maxExposureSec, 0.001)
         assertTrue(mainLens.isRawSupported)
         assertEquals(50, mainLens.minIso)
         assertEquals(6400, mainLens.maxIso)
         assertEquals(49.9392, mainLens.megaPixels, 0.01)
+    }
+
+    @Test
+    fun testOpticalTripletUniqueness() {
+        val lenses = listOf(
+            CameraLens(id = "0", name = "0.5x 48MP f/1.7", opticalZoomRatio = 0.5f, opticalZoom = "0.5x", focalLengthMm = 2.1f, aperture = 1.7f, maxExposureNs = 16_000_000_000L, minExposureNs = 100_000L, minIso = 50, maxIso = 6400, minFocusDistance = 10.0f),
+            CameraLens(id = "0", name = "1.0x 50MP f/1.68", opticalZoomRatio = 1.0f, opticalZoom = "1.0x", focalLengthMm = 6.9f, aperture = 1.68f, maxExposureNs = 16_000_000_000L, minExposureNs = 100_000L, minIso = 50, maxIso = 6400, minFocusDistance = 10.0f),
+            CameraLens(id = "0", name = "5.0x 48MP f/2.8", opticalZoomRatio = 5.0f, opticalZoom = "5.0x", focalLengthMm = 19.0f, aperture = 2.8f, maxExposureNs = 16_000_000_000L, minExposureNs = 100_000L, minIso = 50, maxIso = 6400, minFocusDistance = 5.0f)
+        )
+        // Exactly 3 lenses, each unique ratio, no duplicates
+        assertEquals(3, lenses.size)
+        assertEquals(3, lenses.distinctBy { it.opticalZoomRatio }.size)
+        assertEquals(3, lenses.distinctBy { it.name }.size)
+        assertEquals(listOf("0.5x 48MP f/1.7", "1.0x 50MP f/1.68", "5.0x 48MP f/2.8"), lenses.map { it.name })
     }
 
     @Test

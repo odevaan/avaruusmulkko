@@ -253,10 +253,10 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                         }
                     }
 
-                    // Camera / Optical Zoom Dropdown Menu (No digital zoom, optical range only)
+                    // Camera / Optical Lens Dropdown Menu
                     Box {
                         val activeLens = currentLens
-                        val label = activeLens?.let { "${it.opticalZoom} OPTICAL ▼" } ?: "CAMERA ▼"
+                        val label = activeLens?.name?.let { "$it ▼" } ?: "CAMERA ▼"
                         Button(
                             onClick = { cameraDropdownExpanded = true },
                             colors = ButtonDefaults.buttonColors(containerColor = AstroSurfaceElevated),
@@ -282,28 +282,24 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                                 .border(1.dp, AstroRed, RoundedCornerShape(8.dp))
                         ) {
                             availableLenses.forEach { lens ->
+                                val isSelected = currentLens?.opticalZoomRatio == lens.opticalZoomRatio
                                 DropdownMenuItem(
                                     text = {
                                         Row(
-                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp, horizontal = 4.dp),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Column {
-                                                Text(
-                                                    text = "${lens.opticalZoom} Optical Zoom",
-                                                    color = if (currentLens?.id == lens.id) AstroRed else Color.White,
-                                                    fontSize = 16.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                                Text(
-                                                    text = lens.name,
-                                                    color = AstroTextSecondary,
-                                                    fontSize = 13.sp
-                                                )
-                                            }
-                                            if (currentLens?.id == lens.id) {
-                                                Spacer(modifier = Modifier.width(12.dp))
+                                            Text(
+                                                text = lens.name,
+                                                color = if (isSelected) AstroRed else Color.White,
+                                                fontSize = 16.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                            )
+                                            if (isSelected) {
+                                                Spacer(modifier = Modifier.width(16.dp))
                                                 Text("✓", color = AstroRed, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                                             }
                                         }

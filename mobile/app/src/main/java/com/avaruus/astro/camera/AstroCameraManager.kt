@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
 import android.os.Environment
@@ -81,16 +83,23 @@ class AstroCameraManager(private val context: Context) {
 
     /**
      * Enumerates cameras on the Pixel 9 Pro XL.
-     * Identifies Ultrawide (0.5x), Main Wide (1x), and Telephoto (5x).
+     * Identifies exactly three physical optical cameras:
+     * - 0.5x 48MP f/1.7 (Ultra-Wide)
+     * - 1.0x 50MP f/1.68 (Main Wide)
+     * - 5.0x 48MP f/2.8 (Telephoto)
      */
     fun detectLenses() {
-        val lenses = mutableListOf<CameraLens>()
+        val detectedLenses = mutableListOf<CameraLens>()
         try {
+            var defaultBackId = "0"
+            val physicalSensors = mutableListOf<CameraLens>()
+
             for (id in cameraManager.cameraIdList) {
                 val chars = cameraManager.getCameraCharacteristics(id)
                 val facing = chars.get(CameraCharacteristics.LENS_FACING)
 
                 if (facing == CameraCharacteristics.LENS_FACING_BACK) {
+                    defaultBackId = id
                     val expRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
                     val isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
                     val minFocusDist = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 10.0f
@@ -101,8 +110,6 @@ class AstroCameraManager(private val context: Context) {
                     val maxIso = isoRange?.upper ?: 6400
 
                     val physicalIds = chars.physicalCameraIds
-                    val physicalSensorsFound = mutableListOf<CameraLens>()
-
                     if (physicalIds.isNotEmpty()) {
                         for (pId in physicalIds) {
                             try {
@@ -113,19 +120,25 @@ class AstroCameraManager(private val context: Context) {
                                 val aperture = apertures?.firstOrNull() ?: 1.8f
                                 val minFocus = pChars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: minFocusDist
 
-                                val (zoomRatio, zoomStr, lensLabel) = when {
-                                    focalLength < 3.5f -> Triple(0.5f, "0.5x", "0.5x Ultra-Wide (48MP ƒ/${"%.1f".format(aperture)})")
-                                    focalLength in 3.5f..10.0f -> Triple(1.0f, "1.0x", "1.0x Main Wide (50MP ƒ/${"%.2f".format(aperture)})")
-                                    else -> Triple(5.0f, "5.0x", "5.0x Telephoto (48MP ƒ/${"%.1f".format(aperture)})")
+                                val pMap = pChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                                val rawSizes = pMap?.getOutputSizes(ImageFormat.RAW_SENSOR)
+                                val maxRaw = rawSizes?.maxByOrNull { it.width * it.height }
+                                val rawW = maxRaw?.width ?: 0
+                                val rawH = maxRaw?.height ?: 0
+
+                                val zoomRatio = when {
+                                    focalLength < 3.5f -> 0.5f
+                                    focalLength in 3.5f..10.0f -> 1.0f
+                                    else -> 5.0f
                                 }
 
-                                physicalSensorsFound.add(
+                                physicalSensors.add(
                                     CameraLens(
                                         id = id,
                                         physicalCameraId = pId,
-                                        name = lensLabel,
+                                        name = "",
                                         opticalZoomRatio = zoomRatio,
-                                        opticalZoom = zoomStr,
+                                        opticalZoom = "${zoomRatio}x",
                                         focalLengthMm = focalLength,
                                         aperture = aperture,
                                         maxExposureNs = maxExp,
@@ -133,7 +146,9 @@ class AstroCameraManager(private val context: Context) {
                                         minIso = minIso,
                                         maxIso = maxIso,
                                         minFocusDistance = minFocus,
-                                        isRawSupported = true
+                                        isRawSupported = true,
+                                        rawWidth = rawW,
+                                        rawHeight = rawH
                                     )
                                 )
                             } catch (e: Exception) {
@@ -141,66 +156,88 @@ class AstroCameraManager(private val context: Context) {
                             }
                         }
                     }
-
-                    if (physicalSensorsFound.size >= 2) {
-                        lenses.addAll(physicalSensorsFound.sortedBy { it.opticalZoomRatio })
-                    } else {
-                        // Pixel 9 Pro XL Optical Triplet guarantee:
-                        // 0.5x Ultra-Wide (48 MP Sony IMX858, ƒ/1.7)
-                        // 1.0x Main Wide (50 MP Samsung GNK, ƒ/1.68)
-                        // 5.0x Telephoto (48 MP Sony IMX858 periscope, ƒ/2.8)
-                        val pixel9OpticalLenses = listOf(
-                            CameraLens(
-                                id = id,
-                                name = "0.5x Ultra-Wide (48MP ƒ/1.7)",
-                                opticalZoomRatio = 0.5f,
-                                opticalZoom = "0.5x",
-                                focalLengthMm = 2.1f,
-                                aperture = 1.7f,
-                                maxExposureNs = maxExp,
-                                minExposureNs = minExp,
-                                minIso = minIso,
-                                maxIso = maxIso,
-                                minFocusDistance = 10.0f
-                            ),
-                            CameraLens(
-                                id = id,
-                                name = "1.0x Main Wide (50MP ƒ/1.68)",
-                                opticalZoomRatio = 1.0f,
-                                opticalZoom = "1.0x",
-                                focalLengthMm = 6.9f,
-                                aperture = 1.68f,
-                                maxExposureNs = maxExp,
-                                minExposureNs = minExp,
-                                minIso = minIso,
-                                maxIso = maxIso,
-                                minFocusDistance = 10.0f
-                            ),
-                            CameraLens(
-                                id = id,
-                                name = "5.0x Telephoto (48MP ƒ/2.8)",
-                                opticalZoomRatio = 5.0f,
-                                opticalZoom = "5.0x",
-                                focalLengthMm = 19.0f,
-                                aperture = 2.8f,
-                                maxExposureNs = maxExp,
-                                minExposureNs = minExp,
-                                minIso = minIso,
-                                maxIso = maxIso,
-                                minFocusDistance = 5.0f
-                            )
-                        )
-                        lenses.addAll(pixel9OpticalLenses)
-                    }
-                    break
                 }
             }
 
-            _availableLenses.value = lenses
-            if (_currentLens.value == null && lenses.isNotEmpty()) {
-                val defaultLens = lenses.find { it.opticalZoomRatio == 1.0f } ?: lenses.first()
-                _currentLens.value = defaultLens
-                _settings.value = _settings.value.copy(lens = defaultLens)
+            // Group physical sensors by magnification and pick the best RAW resolution for each
+            val best05 = physicalSensors.filter { it.opticalZoomRatio == 0.5f }
+                .maxByOrNull { it.rawWidth.toLong() * it.rawHeight.toLong() }
+            val best10 = physicalSensors.filter { it.opticalZoomRatio == 1.0f }
+                .maxByOrNull { it.rawWidth.toLong() * it.rawHeight.toLong() }
+            val best50 = physicalSensors.filter { it.opticalZoomRatio == 5.0f }
+                .maxByOrNull { it.rawWidth.toLong() * it.rawHeight.toLong() }
+
+            val chars = cameraManager.getCameraCharacteristics(defaultBackId)
+            val expRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            val isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            val maxExp = expRange?.upper ?: 16_000_000_000L
+            val minExp = expRange?.lower ?: 100_000L
+            val minIso = isoRange?.lower ?: 50
+            val maxIso = isoRange?.upper ?: 6400
+
+            // Pixel 9 Pro XL Optical Triplet - exactly one entry per physical lens
+            val lens05 = CameraLens(
+                id = defaultBackId,
+                physicalCameraId = best05?.physicalCameraId,
+                name = "0.5x 48MP f/1.7",
+                opticalZoomRatio = 0.5f,
+                opticalZoom = "0.5x",
+                focalLengthMm = best05?.focalLengthMm ?: 2.1f,
+                aperture = 1.7f,
+                maxExposureNs = best05?.maxExposureNs ?: maxExp,
+                minExposureNs = best05?.minExposureNs ?: minExp,
+                minIso = best05?.minIso ?: minIso,
+                maxIso = best05?.maxIso ?: maxIso,
+                minFocusDistance = best05?.minFocusDistance ?: 10.0f,
+                isRawSupported = true,
+                rawWidth = if (best05 != null && best05.rawWidth > 0) best05.rawWidth else 8160,
+                rawHeight = if (best05 != null && best05.rawHeight > 0) best05.rawHeight else 6120
+            )
+
+            val lens10 = CameraLens(
+                id = defaultBackId,
+                physicalCameraId = best10?.physicalCameraId,
+                name = "1.0x 50MP f/1.68",
+                opticalZoomRatio = 1.0f,
+                opticalZoom = "1.0x",
+                focalLengthMm = best10?.focalLengthMm ?: 6.9f,
+                aperture = 1.68f,
+                maxExposureNs = best10?.maxExposureNs ?: maxExp,
+                minExposureNs = best10?.minExposureNs ?: minExp,
+                minIso = best10?.minIso ?: minIso,
+                maxIso = best10?.maxIso ?: maxIso,
+                minFocusDistance = best10?.minFocusDistance ?: 10.0f,
+                isRawSupported = true,
+                rawWidth = if (best10 != null && best10.rawWidth > 0) best10.rawWidth else 8160,
+                rawHeight = if (best10 != null && best10.rawHeight > 0) best10.rawHeight else 6120
+            )
+
+            val lens50 = CameraLens(
+                id = defaultBackId,
+                physicalCameraId = best50?.physicalCameraId,
+                name = "5.0x 48MP f/2.8",
+                opticalZoomRatio = 5.0f,
+                opticalZoom = "5.0x",
+                focalLengthMm = best50?.focalLengthMm ?: 19.0f,
+                aperture = 2.8f,
+                maxExposureNs = best50?.maxExposureNs ?: maxExp,
+                minExposureNs = best50?.minExposureNs ?: minExp,
+                minIso = best50?.minIso ?: minIso,
+                maxIso = best50?.maxIso ?: maxIso,
+                minFocusDistance = best50?.minFocusDistance ?: 5.0f,
+                isRawSupported = true,
+                rawWidth = if (best50 != null && best50.rawWidth > 0) best50.rawWidth else 8160,
+                rawHeight = if (best50 != null && best50.rawHeight > 0) best50.rawHeight else 6120
+            )
+
+            detectedLenses.add(lens05)
+            detectedLenses.add(lens10)
+            detectedLenses.add(lens50)
+
+            _availableLenses.value = detectedLenses
+            if (_currentLens.value == null) {
+                _currentLens.value = lens10
+                _settings.value = _settings.value.copy(lens = lens10)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to enumerate cameras", e)
@@ -209,22 +246,65 @@ class AstroCameraManager(private val context: Context) {
 
     fun selectLens(lens: CameraLens, previewSurface: Surface) {
         val previousLens = _currentLens.value
+        if (previousLens?.opticalZoomRatio == lens.opticalZoomRatio &&
+            previousLens.physicalCameraId == lens.physicalCameraId &&
+            cameraDevice != null && captureSession != null) {
+            return
+        }
+
         _currentLens.value = lens
         _settings.value = _settings.value.copy(lens = lens)
 
-        if (previousLens?.id == lens.id && cameraDevice != null && captureSession != null) {
-            // Optical zoom ratio switch on the same logical camera device:
-            // Hardware switches sensors seamlessly without restarting camera
-            updatePreviewRepeating()
-        } else {
-            closeCamera()
-            openCamera(lens.id, previewSurface)
+        val device = cameraDevice
+        if (device != null && previousLens?.id == lens.id) {
+            try {
+                captureSession?.close()
+                captureSession = null
+                setupRawImageReader(device.id, lens)
+                createCaptureSession(device, previewSurface, lens)
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "Seamless physical switch failed, reopening camera", e)
+            }
         }
+
+        closeCamera()
+        openCamera(lens.id, previewSurface)
     }
 
     fun updateSettings(newSettings: CaptureSettings) {
         _settings.value = newSettings
         updatePreviewRepeating()
+    }
+
+    private fun setupRawImageReader(logicalCameraId: String, lens: CameraLens?) {
+        rawImageReader?.close()
+        rawImageReader = null
+
+        val pId = lens?.physicalCameraId
+        val chars = if (!pId.isNullOrEmpty()) {
+            try {
+                cameraManager.getCameraCharacteristics(pId)
+            } catch (e: Exception) {
+                cameraManager.getCameraCharacteristics(logicalCameraId)
+            }
+        } else {
+            cameraManager.getCameraCharacteristics(logicalCameraId)
+        }
+
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val rawSizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
+        val rawSize = rawSizes?.maxByOrNull { it.width * it.height }
+            ?: (if (lens != null && lens.rawWidth > 0 && lens.rawHeight > 0) Size(lens.rawWidth, lens.rawHeight) else Size(4080, 3072))
+
+        Log.i(TAG, "Setting up RAW ImageReader for ${lens?.name ?: logicalCameraId}: ${rawSize.width}x${rawSize.height}")
+
+        rawImageReader = ImageReader.newInstance(
+            rawSize.width,
+            rawSize.height,
+            ImageFormat.RAW_SENSOR,
+            3 // buffer up to 3 frames
+        )
     }
 
     @SuppressLint("MissingPermission")
@@ -237,25 +317,14 @@ class AstroCameraManager(private val context: Context) {
                 throw RuntimeException("Time out waiting to lock camera opening.")
             }
 
-            val chars = cameraManager.getCameraCharacteristics(cameraId)
-            val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-
-            // Setup RAW_SENSOR ImageReader with largest resolution
-            val rawSizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
-            val rawSize = rawSizes?.maxByOrNull { it.width * it.height } ?: Size(4080, 3072)
-
-            rawImageReader = ImageReader.newInstance(
-                rawSize.width,
-                rawSize.height,
-                ImageFormat.RAW_SENSOR,
-                3 // buffer up to 3 frames
-            )
+            val targetLens = _currentLens.value
+            setupRawImageReader(cameraId, targetLens)
 
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     cameraOpenCloseLock.release()
                     cameraDevice = camera
-                    createCaptureSession(camera, surface, rawImageReader!!.surface)
+                    createCaptureSession(camera, surface, _currentLens.value)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -278,9 +347,56 @@ class AstroCameraManager(private val context: Context) {
         }
     }
 
-    private fun createCaptureSession(camera: CameraDevice, preview: Surface, rawSurface: Surface) {
+    private fun createCaptureSession(camera: CameraDevice, surface: Surface, lens: CameraLens?) {
+        val reader = rawImageReader ?: return
+        try {
+            val previewConfig = OutputConfiguration(surface)
+            val rawConfig = OutputConfiguration(reader.surface)
+
+            val physicalId = lens?.physicalCameraId
+            if (!physicalId.isNullOrEmpty()) {
+                try {
+                    previewConfig.setPhysicalCameraId(physicalId)
+                    rawConfig.setPhysicalCameraId(physicalId)
+                    Log.i(TAG, "Configuring session with physical camera ID: $physicalId")
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Could not set physical camera ID $physicalId", e)
+                }
+            }
+
+            val cameraExecutor = java.util.concurrent.Executor { command ->
+                cameraHandler?.post(command) ?: command.run()
+            }
+
+            val sessionConfig = SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                listOf(previewConfig, rawConfig),
+                cameraExecutor,
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        if (cameraDevice == null) return
+                        captureSession = session
+                        Log.i(TAG, "Capture session configured successfully for ${lens?.name}")
+                        updatePreviewRepeating()
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        Log.e(TAG, "Capture session with physical ID $physicalId failed, falling back to standard session")
+                        fallbackStandardSession(camera, surface, reader.surface)
+                    }
+                }
+            )
+            camera.createCaptureSession(sessionConfig)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating session with SessionConfiguration, falling back", e)
+            fallbackStandardSession(camera, surface, reader.surface)
+        }
+    }
+
+    private fun fallbackStandardSession(camera: CameraDevice, preview: Surface, rawSurface: Surface) {
         try {
             val surfaces = listOf(preview, rawSurface)
+            @Suppress("DEPRECATION")
             camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     if (cameraDevice == null) return
@@ -289,11 +405,11 @@ class AstroCameraManager(private val context: Context) {
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Log.e(TAG, "Capture session configuration failed")
+                    Log.e(TAG, "Fallback capture session configuration failed")
                 }
             }, cameraHandler)
         } catch (e: Exception) {
-            Log.e(TAG, "Error creating capture session", e)
+            Log.e(TAG, "Fallback createCaptureSession failed", e)
         }
     }
 
@@ -325,12 +441,17 @@ class AstroCameraManager(private val context: Context) {
             // OIS off for astronomy on mount/tripod
             builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
 
-            // Select physical optical camera via native optical zoom ratio (0.5x, 1.0x, 5.0x)
-            builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, current.lens?.opticalZoomRatio ?: 1.0f)
+            // Select physical optical camera via native optical zoom ratio (0.5x, 1.0x, 5.0x) coerced safely to device range
+            val chars = cameraManager.getCameraCharacteristics(device.id)
+            val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            val targetRatio = current.lens?.opticalZoomRatio ?: 1.0f
+            if (zoomRange != null) {
+                val safeRatio = targetRatio.coerceIn(zoomRange.lower, zoomRange.upper)
+                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, safeRatio)
+            }
 
             // Digital zoom loupe preview if set
             if (current.zoomFactor > 1.0f) {
-                val chars = cameraManager.getCameraCharacteristics(device.id)
                 val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
                 if (sensorRect != null) {
                     val cropW = (sensorRect.width() / current.zoomFactor).toInt()
@@ -364,6 +485,7 @@ class AstroCameraManager(private val context: Context) {
 
         val chars = cameraManager.getCameraCharacteristics(device.id)
         val current = _settings.value
+        val activeLens = current.lens
 
         val targetDir = getOrCreateSessionDir(sessionName)
 
@@ -379,7 +501,7 @@ class AstroCameraManager(private val context: Context) {
                 reader.setOnImageAvailableListener(null, null)
                 val image = r.acquireLatestImage()
                 if (image != null) {
-                    saveDng(image, chars, outputFile, resultDeferred)
+                    saveDng(image, chars, activeLens, outputFile, resultDeferred)
                 } else {
                     resultDeferred.complete(null)
                 }
@@ -409,8 +531,13 @@ class AstroCameraManager(private val context: Context) {
             captureBuilder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
             captureBuilder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
 
-            // Engage exact physical optical camera (0.5x, 1.0x, 5.0x) for RAW capture
-            captureBuilder.set(CaptureRequest.CONTROL_ZOOM_RATIO, current.lens?.opticalZoomRatio ?: 1.0f)
+            // Engage exact physical optical camera (0.5x, 1.0x, 5.0x) for RAW capture safely coerced
+            val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            val captureRatio = current.lens?.opticalZoomRatio ?: 1.0f
+            if (zoomRange != null) {
+                val safeRatio = captureRatio.coerceIn(zoomRange.lower, zoomRange.upper)
+                captureBuilder.set(CaptureRequest.CONTROL_ZOOM_RATIO, safeRatio)
+            }
 
             // Total capture result callback
             session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
@@ -453,7 +580,8 @@ class AstroCameraManager(private val context: Context) {
 
     private fun saveDng(
         image: Image,
-        chars: CameraCharacteristics,
+        logicalChars: CameraCharacteristics,
+        lens: CameraLens?,
         outFile: File,
         deferred: CompletableDeferred<File?>
     ) {
@@ -461,15 +589,26 @@ class AstroCameraManager(private val context: Context) {
             try {
                 // Wait briefly if capture result hasn't arrived yet
                 var attempts = 0
-                while (lastCaptureResult == null && attempts < 30) {
+                while (lastCaptureResult == null && attempts < 40) {
                     delay(50)
                     attempts++
                 }
 
                 val result = lastCaptureResult
                 if (result != null) {
-                    val dngCreator = DngCreator(chars, result)
-                    dngCreator.setDescription("Avaruusmulkko Astro Suite RAW; Exp=${_settings.value.exposureTimeNs}ns, ISO=${_settings.value.iso}")
+                    val pId = lens?.physicalCameraId
+                    val dngChars = if (!pId.isNullOrEmpty()) {
+                        try {
+                            cameraManager.getCameraCharacteristics(pId)
+                        } catch (e: Exception) {
+                            logicalChars
+                        }
+                    } else {
+                        logicalChars
+                    }
+
+                    val dngCreator = DngCreator(dngChars, result)
+                    dngCreator.setDescription("Avaruusmulkko Astro Suite RAW (${lens?.name ?: "1.0x"}); Exp=${_settings.value.exposureTimeNs}ns, ISO=${_settings.value.iso}")
                     FileOutputStream(outFile).use { fos ->
                         dngCreator.writeImage(fos, image)
                     }
