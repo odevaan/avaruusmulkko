@@ -1,0 +1,31 @@
+# Android & Gradle
+.gradle/
+build/
+**/build/
+*.apk
+*.aab
+local.properties
+.cxx/
+tools/
+
+# IDE & Editor files
+.idea/
+*.iml
+.vscode/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+*.log
+
+# Captured Astrophotography Data (DNG/FITS/TIFF)
+data/sessions/
+*.dng
+*.fits
+*.tif
+*.tiff
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
