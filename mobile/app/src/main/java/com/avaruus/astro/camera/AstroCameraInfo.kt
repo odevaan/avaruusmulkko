@@ -19,11 +19,37 @@ data class CameraLens(
     val minFocusDistance: Float, // Hyperfocal / closest focus. 0.0f = infinity
     val isRawSupported: Boolean = true,
     val rawWidth: Int = 0,
-    val rawHeight: Int = 0
+    val rawHeight: Int = 0,
+    val sensorOrientation: Int = 90,
+    val previewWidth: Int = 1440,
+    val previewHeight: Int = 1080
 ) {
     val maxExposureSec: Double get() = maxExposureNs / 1_000_000_000.0
     val minExposureSec: Double get() = minExposureNs / 1_000_000_000.0
     val megaPixels: Double get() = (rawWidth.toDouble() * rawHeight.toDouble()) / 1_000_000.0
+
+    /**
+     * Visual width-to-height ratio (width / height) of the uncropped camera frame on screen,
+     * accounting for sensor mounting orientation vs display rotation (0, 90, 180, 270 deg).
+     */
+    fun displayAspectRatio(displayRotationDeg: Int = 0): Float {
+        val baseW = when {
+            previewWidth > 0 && previewHeight > 0 -> previewWidth
+            rawWidth > 0 && rawHeight > 0 -> rawWidth
+            else -> 4
+        }
+        val baseH = when {
+            previewWidth > 0 && previewHeight > 0 -> previewHeight
+            rawWidth > 0 && rawHeight > 0 -> rawHeight
+            else -> 3
+        }
+        val relativeRotation = ((sensorOrientation - displayRotationDeg) % 360 + 360) % 360
+        return if (relativeRotation == 90 || relativeRotation == 270) {
+            baseH.toFloat() / baseW.toFloat()
+        } else {
+            baseW.toFloat() / baseH.toFloat()
+        }
+    }
 }
 
 enum class FrameType(val prefix: String, val description: String) {

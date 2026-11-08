@@ -143,6 +143,10 @@ class AstroCameraManager(private val context: Context) {
                                 val maxRaw = rawSizes?.maxByOrNull { it.width * it.height }
                                 val rawW = maxRaw?.width ?: 0
                                 val rawH = maxRaw?.height ?: 0
+                                val pOrientation = pChars.get(CameraCharacteristics.SENSOR_ORIENTATION)
+                                    ?: chars.get(CameraCharacteristics.SENSOR_ORIENTATION)
+                                    ?: 90
+                                val previewSz = chooseFullFramePreviewSize(pChars, chars, rawW, rawH)
 
                                 val zoomRatio = when {
                                     focalLength < 3.5f -> 0.5f
@@ -166,7 +170,10 @@ class AstroCameraManager(private val context: Context) {
                                         minFocusDistance = minFocus,
                                         isRawSupported = true,
                                         rawWidth = rawW,
-                                        rawHeight = rawH
+                                        rawHeight = rawH,
+                                        sensorOrientation = pOrientation,
+                                        previewWidth = previewSz.width,
+                                        previewHeight = previewSz.height
                                     )
                                 )
                             } catch (e: Exception) {
@@ -189,6 +196,8 @@ class AstroCameraManager(private val context: Context) {
             val expRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
             val isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
             val maxAnalogSensitivity = chars.get(CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY) ?: 1600
+            val defaultOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            val defaultPreviewSize = chooseFullFramePreviewSize(chars, chars, 8160, 6120)
             val maxExp = expRange?.upper ?: 16_000_000_000L
             val minExp = expRange?.lower ?: 100_000L
             val minIso = isoRange?.lower ?: 50
@@ -212,7 +221,10 @@ class AstroCameraManager(private val context: Context) {
                 minFocusDistance = best05?.minFocusDistance ?: 10.0f,
                 isRawSupported = true,
                 rawWidth = if (best05 != null && best05.rawWidth > 0) best05.rawWidth else 8160,
-                rawHeight = if (best05 != null && best05.rawHeight > 0) best05.rawHeight else 6120
+                rawHeight = if (best05 != null && best05.rawHeight > 0) best05.rawHeight else 6120,
+                sensorOrientation = best05?.sensorOrientation ?: defaultOrientation,
+                previewWidth = best05?.previewWidth ?: defaultPreviewSize.width,
+                previewHeight = best05?.previewHeight ?: defaultPreviewSize.height
             )
 
             val lens10 = CameraLens(
@@ -231,7 +243,10 @@ class AstroCameraManager(private val context: Context) {
                 minFocusDistance = best10?.minFocusDistance ?: 10.0f,
                 isRawSupported = true,
                 rawWidth = if (best10 != null && best10.rawWidth > 0) best10.rawWidth else 8160,
-                rawHeight = if (best10 != null && best10.rawHeight > 0) best10.rawHeight else 6120
+                rawHeight = if (best10 != null && best10.rawHeight > 0) best10.rawHeight else 6120,
+                sensorOrientation = best10?.sensorOrientation ?: defaultOrientation,
+                previewWidth = best10?.previewWidth ?: defaultPreviewSize.width,
+                previewHeight = best10?.previewHeight ?: defaultPreviewSize.height
             )
 
             val lens50 = CameraLens(
@@ -250,7 +265,10 @@ class AstroCameraManager(private val context: Context) {
                 minFocusDistance = best50?.minFocusDistance ?: 5.0f,
                 isRawSupported = true,
                 rawWidth = if (best50 != null && best50.rawWidth > 0) best50.rawWidth else 8160,
-                rawHeight = if (best50 != null && best50.rawHeight > 0) best50.rawHeight else 6120
+                rawHeight = if (best50 != null && best50.rawHeight > 0) best50.rawHeight else 6120,
+                sensorOrientation = best50?.sensorOrientation ?: defaultOrientation,
+                previewWidth = best50?.previewWidth ?: defaultPreviewSize.width,
+                previewHeight = best50?.previewHeight ?: defaultPreviewSize.height
             )
 
             detectedLenses.add(lens05)
@@ -265,6 +283,49 @@ class AstroCameraManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to enumerate cameras", e)
         }
+    }
+
+    /**
+     * Picks the highest-resolution SurfaceHolder preview stream within the Camera2 PREVIEW tier
+     * (<= 1920x1080) that matches the native uncropped RAW sensor aspect ratio (typically 4:3).
+     */
+    private fun chooseFullFramePreviewSize(
+        primaryChars: CameraCharacteristics,
+        logicalChars: CameraCharacteristics,
+        rawW: Int,
+        rawH: Int
+    ): Size {
+        val targetAspect = if (rawW > 0 && rawH > 0) rawW.toFloat() / rawH.toFloat() else (4f / 3f)
+        val primarySizes = primaryChars
+            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?.getOutputSizes(android.view.SurfaceHolder::class.java)
+            ?.toList()
+            .orEmpty()
+        val logicalSizes = logicalChars
+            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?.getOutputSizes(android.view.SurfaceHolder::class.java)
+            ?.toList()
+            .orEmpty()
+
+        // Prefer sizes supported by both physical & logical maps so fallback sessions also match
+        val commonPool = if (primarySizes.isNotEmpty() && logicalSizes.isNotEmpty()) {
+            primarySizes.filter { p -> logicalSizes.any { l -> l.width == p.width && l.height == p.height } }
+                .ifEmpty { primarySizes }
+        } else {
+            primarySizes.ifEmpty { logicalSizes }
+        }
+
+        val matchingPreviewTier = commonPool.filter { sz ->
+            sz.width <= 1920 &&
+                sz.height <= 1080 &&
+                kotlin.math.abs((sz.width.toFloat() / sz.height.toFloat()) - targetAspect) <= 0.03f
+        }
+
+        return matchingPreviewTier.maxByOrNull { it.width * it.height }
+            ?: commonPool.filter {
+                kotlin.math.abs((it.width.toFloat() / it.height.toFloat()) - targetAspect) <= 0.03f
+            }.minByOrNull { kotlin.math.abs(it.width * it.height - 1440 * 1080) }
+            ?: Size(1440, 1080)
     }
 
     fun selectLens(lens: CameraLens, previewSurface: Surface) {
@@ -341,10 +402,17 @@ class AstroCameraManager(private val context: Context) {
         val chars = getActiveLensCharacteristics(logicalCameraId, lens)
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
+        val sensorAspect = if (lens != null && lens.rawWidth > 0 && lens.rawHeight > 0) {
+            lens.rawWidth.toFloat() / lens.rawHeight.toFloat()
+        } else {
+            4f / 3f
+        }
         val targetArea = 320 * 240
-        val analysisSize = yuvSizes
-            ?.filter { it.width in 160..640 && it.height >= 120 }
+        val smallYuv = yuvSizes?.filter { it.width in 160..640 && it.height >= 120 }
+        val analysisSize = smallYuv
+            ?.filter { kotlin.math.abs((it.width.toFloat() / it.height.toFloat()) - sensorAspect) <= 0.03f }
             ?.minByOrNull { kotlin.math.abs(it.width * it.height - targetArea) }
+            ?: smallYuv?.minByOrNull { kotlin.math.abs(it.width * it.height - targetArea) }
             ?: yuvSizes?.minByOrNull { it.width * it.height }
             ?: Size(320, 240)
 
@@ -364,6 +432,9 @@ class AstroCameraManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun openCamera(cameraId: String, surface: Surface) {
+        if (cameraDevice?.id == cameraId && captureSession != null && this.previewSurface === surface) {
+            return
+        }
         this.previewSurface = surface
         startBackgroundThread()
 

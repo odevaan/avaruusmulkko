@@ -173,4 +173,33 @@ class AstroLogicTest {
         assertEquals(250f, stats.p90Y, 0.5f)
         assertEquals(0.25f, stats.clippedFraction, 0.02f)
     }
+
+    @Test
+    fun testPreviewDisplayAspectRatioFullFrame() {
+        val lens90 = CameraLens(
+            id = "0",
+            name = "1.0x 50MP f/1.68",
+            focalLengthMm = 6.9f,
+            aperture = 1.68f,
+            maxExposureNs = 16_000_000_000L,
+            minExposureNs = 100_000L,
+            minIso = 50,
+            maxIso = 6400,
+            minFocusDistance = 10.0f,
+            rawWidth = 8160,
+            rawHeight = 6120,
+            sensorOrientation = 90,
+            previewWidth = 1440,
+            previewHeight = 1080
+        )
+
+        // Portrait (0°): 4:3 sensor rotated 90° -> 3:4 (0.75) width/height
+        assertEquals(0.75f, lens90.displayAspectRatio(0), 0.001f)
+        // Landscape (90°): 4:3 (1.3333) width/height
+        assertEquals(4f / 3f, lens90.displayAspectRatio(90), 0.001f)
+
+        // Periscope sensor mounted at 270° in portrait (0°) -> also 3:4 (0.75)
+        val lens270 = lens90.copy(sensorOrientation = 270)
+        assertEquals(0.75f, lens270.displayAspectRatio(0), 0.001f)
+    }
 }

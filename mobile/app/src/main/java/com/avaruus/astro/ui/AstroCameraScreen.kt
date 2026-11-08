@@ -1,5 +1,6 @@
 package com.avaruus.astro.ui
 
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
@@ -22,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -67,30 +69,68 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
         return
     }
 
+    val context = LocalContext.current
+    val displayRotationDeg = when (context.display?.rotation) {
+        Surface.ROTATION_90 -> 90
+        Surface.ROTATION_180 -> 180
+        Surface.ROTATION_270 -> 270
+        else -> 0
+    }
+    val activeLensForAspect = currentLens ?: availableLenses.firstOrNull()
+    val previewW = activeLensForAspect?.previewWidth ?: 1440
+    val previewH = activeLensForAspect?.previewHeight ?: 1080
+    val visualAspect = activeLensForAspect?.displayAspectRatio(displayRotationDeg) ?: 0.75f
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(AstroBlack)
     ) {
-        // 1. Full-screen Camera Viewfinder
-        AndroidView(
+        // 1. Fitted Full-Frame Camera Viewfinder (preserves exact sensor aspect ratio with black letterbox bars)
+        BoxWithConstraints(
             modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-                SurfaceView(context).apply {
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(holder: SurfaceHolder) {
-                            viewModel.onSurfaceReady(holder.surface)
-                        }
-
-                        override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-
-                        override fun surfaceDestroyed(holder: SurfaceHolder) {
-                            viewModel.onSurfaceDestroyed()
-                        }
-                    })
-                }
+            contentAlignment = Alignment.Center
+        ) {
+            val containerAspect = if (maxHeight > 0.dp) maxWidth / maxHeight else visualAspect
+            val fittedModifier = if (containerAspect > visualAspect) {
+                Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(visualAspect, matchHeightConstraintsFirst = true)
+            } else {
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(visualAspect, matchHeightConstraintsFirst = false)
             }
-        )
+
+            key(previewW, previewH) {
+                AndroidView(
+                    modifier = fittedModifier,
+                    factory = { ctx ->
+                        SurfaceView(ctx).apply {
+                            holder.setFixedSize(previewW, previewH)
+                            holder.addCallback(object : SurfaceHolder.Callback {
+                                override fun surfaceCreated(holder: SurfaceHolder) {}
+
+                                override fun surfaceChanged(
+                                    holder: SurfaceHolder,
+                                    format: Int,
+                                    width: Int,
+                                    height: Int
+                                ) {
+                                    if (width == previewW && height == previewH) {
+                                        viewModel.onSurfaceReady(holder.surface)
+                                    }
+                                }
+
+                                override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                    viewModel.onSurfaceDestroyed()
+                                }
+                            })
+                        }
+                    }
+                )
+            }
+        }
 
         // 2. Tap anywhere outside buttons/sliders to toggle UI visibility on/off
         Box(
