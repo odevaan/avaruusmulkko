@@ -29,7 +29,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.avaruus.astro.camera.AstroMode
 
 private val EXPOSURE_VALUES_SEC = listOf(0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0)
-private val ISO_VALUES = listOf(50, 100, 200, 400, 800, 1600, 3200, 6400, 12800)
+private val ISO_VALUES = listOf(200, 700, 1600, 3200)
 private val SHOT_COUNT_VALUES = listOf(1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 150, 200, 0) // 0 = unlimited
 
 @Composable
@@ -464,21 +464,29 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                         }
 
                         // 3. GAIN (ISO) SLIDER
-                        val currentIsoIdx = ISO_VALUES.indexOf(settings.iso).coerceAtLeast(0)
+                        val currentIsoIdx = ISO_VALUES.indexOf(settings.iso).let { if (it >= 0) it else 1 }
 
                         Column {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text("GAIN", color = AstroTextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                                Text("ISO ${settings.iso}", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                val isoLabel = when (settings.iso) {
+                                    200 -> "ISO 200 (LCG / Wide DR)"
+                                    700 -> "ISO 700 (HCG Sweet Spot)"
+                                    1600 -> "ISO 1600 (Max Native)"
+                                    3200 -> "ISO 3200 (Digital Boost)"
+                                    else -> "ISO ${settings.iso}"
+                                }
+                                Text(isoLabel, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                             }
                             Slider(
                                 value = currentIsoIdx.toFloat(),
                                 onValueChange = { idx ->
-                                    val targetIso = ISO_VALUES[idx.toInt().coerceIn(0, ISO_VALUES.size - 1)]
-                                    viewModel.setIso(targetIso)
+                                    val snappedIdx = kotlin.math.round(idx).toInt().coerceIn(0, ISO_VALUES.size - 1)
+                                    viewModel.setIso(ISO_VALUES[snappedIdx])
                                 },
                                 valueRange = 0f..(ISO_VALUES.size - 1).toFloat(),
                                 steps = ISO_VALUES.size - 2,

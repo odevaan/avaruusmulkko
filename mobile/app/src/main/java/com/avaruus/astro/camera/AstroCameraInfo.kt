@@ -15,6 +15,7 @@ data class CameraLens(
     val minExposureNs: Long,
     val minIso: Int,
     val maxIso: Int,
+    val maxAnalogIso: Int = 1600,
     val minFocusDistance: Float, // Hyperfocal / closest focus. 0.0f = infinity
     val isRawSupported: Boolean = true,
     val rawWidth: Int = 0,
@@ -64,13 +65,13 @@ object AstroDefaults {
         ExposurePreset("30.0s", 30_000_000_000L)
     )
 
-    val ISO_PRESETS = listOf(50, 100, 200, 400, 800, 1600, 3200, 6400, 12800)
+    val ISO_PRESETS = listOf(200, 700, 1600, 3200)
 }
 
 data class CaptureSettings(
     val lens: CameraLens? = null,
     val exposureTimeNs: Long = 10_000_000_000L, // Default 10.0s
-    val iso: Int = 1600,
+    val iso: Int = 700, // Optimal Dual Conversion Gain (HCG) sweet spot for astrophotography SNR
     val focusDistance: Float = 0.0f, // 0.0f = Infinity in Camera2
     val mode: AstroMode = AstroMode.LIGHT,
     val zoomFactor: Float = 1.0f // Preview zoom loupe

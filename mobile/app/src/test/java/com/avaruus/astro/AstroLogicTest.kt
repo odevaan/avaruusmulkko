@@ -92,4 +92,13 @@ class AstroLogicTest {
         assertEquals("BOOST", com.avaruus.astro.ui.AstroStretchMode.BOOST.label)
         assertEquals("LINEAR", com.avaruus.astro.ui.AstroStretchMode.OFF.label)
     }
+
+    @Test
+    fun testIsoPresetsAndNativeGain() {
+        assertEquals(listOf(200, 700, 1600, 3200), AstroDefaults.ISO_PRESETS)
+        assertTrue(AstroDefaults.ISO_PRESETS.contains(200))
+        assertTrue(AstroDefaults.ISO_PRESETS.contains(700))
+        assertTrue(AstroDefaults.ISO_PRESETS.contains(1600))
+        assertTrue(AstroDefaults.ISO_PRESETS.contains(3200))
+    }
 }

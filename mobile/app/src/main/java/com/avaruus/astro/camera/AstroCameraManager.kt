@@ -170,10 +170,12 @@ class AstroCameraManager(private val context: Context) {
             val chars = cameraManager.getCameraCharacteristics(defaultBackId)
             val expRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
             val isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            val maxAnalogSensitivity = chars.get(CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY) ?: 1600
             val maxExp = expRange?.upper ?: 16_000_000_000L
             val minExp = expRange?.lower ?: 100_000L
             val minIso = isoRange?.lower ?: 50
             val maxIso = isoRange?.upper ?: 6400
+            Log.i(TAG, "Hardware max analog sensitivity without digital boost: $maxAnalogSensitivity")
 
             // Pixel 9 Pro XL Optical Triplet - exactly one entry per physical lens
             val lens05 = CameraLens(
@@ -188,6 +190,7 @@ class AstroCameraManager(private val context: Context) {
                 minExposureNs = best05?.minExposureNs ?: minExp,
                 minIso = best05?.minIso ?: minIso,
                 maxIso = best05?.maxIso ?: maxIso,
+                maxAnalogIso = maxAnalogSensitivity,
                 minFocusDistance = best05?.minFocusDistance ?: 10.0f,
                 isRawSupported = true,
                 rawWidth = if (best05 != null && best05.rawWidth > 0) best05.rawWidth else 8160,
@@ -206,6 +209,7 @@ class AstroCameraManager(private val context: Context) {
                 minExposureNs = best10?.minExposureNs ?: minExp,
                 minIso = best10?.minIso ?: minIso,
                 maxIso = best10?.maxIso ?: maxIso,
+                maxAnalogIso = maxAnalogSensitivity,
                 minFocusDistance = best10?.minFocusDistance ?: 10.0f,
                 isRawSupported = true,
                 rawWidth = if (best10 != null && best10.rawWidth > 0) best10.rawWidth else 8160,
@@ -224,6 +228,7 @@ class AstroCameraManager(private val context: Context) {
                 minExposureNs = best50?.minExposureNs ?: minExp,
                 minIso = best50?.minIso ?: minIso,
                 maxIso = best50?.maxIso ?: maxIso,
+                maxAnalogIso = maxAnalogSensitivity,
                 minFocusDistance = best50?.minFocusDistance ?: 5.0f,
                 isRawSupported = true,
                 rawWidth = if (best50 != null && best50.rawWidth > 0) best50.rawWidth else 8160,
