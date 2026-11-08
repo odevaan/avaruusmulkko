@@ -135,6 +135,6 @@ class AstroViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         sequencer.stopSequence()
-        cameraManager.closeCamera()
+        cameraManager.release()
     }
 }

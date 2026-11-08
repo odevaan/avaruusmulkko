@@ -34,9 +34,8 @@ object PreviewAutoExposure {
 
     /**
      * Monotonically increasing preview exposure ladder (~0.65 EV / ~1.58x per step).
-     * Across the twilight and night-sky range (8ms to 1.6s), ISO stays at 3200 while exposure
-     * duration steps smoothly; top steps boost up to 2.5s @ ISO 6400 for dark skies / f/2.8 tele,
-     * and bottom steps lower shutter + ISO to handle bright indoor or lunar scenes without whiteout.
+     * Above 160ms, ISO ramps promptly to 6400 so dark-sky framing reaches 24x brightness
+     * while keeping maximum per-frame integration capped at 1.2s for responsive camera switching.
      */
     val STEPS: List<PreviewStep> = listOf(
         PreviewStep(100_000L, 100),         // 0:  0.1 ms, ISO 100
@@ -57,17 +56,23 @@ object PreviewAutoExposure {
         PreviewStep(50_000_000L, 3200),     // 15: 50.0 ms, ISO 3200 (20 fps)
         PreviewStep(80_000_000L, 3200),     // 16: 80.0 ms, ISO 3200 (12.5 fps)
         PreviewStep(100_000_000L, 3200),    // 17: 100.0 ms, ISO 3200 (10 fps - initial step)
-        PreviewStep(160_000_000L, 3200),    // 18: 160.0 ms, ISO 3200
-        PreviewStep(250_000_000L, 3200),    // 19: 250.0 ms, ISO 3200
-        PreviewStep(400_000_000L, 3200),    // 20: 400.0 ms, ISO 3200
-        PreviewStep(650_000_000L, 3200),    // 21: 650.0 ms, ISO 3200
-        PreviewStep(1_000_000_000L, 3200),  // 22: 1.00 s, ISO 3200
-        PreviewStep(1_600_000_000L, 3200),  // 23: 1.60 s, ISO 3200
-        PreviewStep(2_000_000_000L, 4800),  // 24: 2.00 s, ISO 4800
-        PreviewStep(2_500_000_000L, 6400)   // 25: 2.50 s, ISO 6400
+        PreviewStep(160_000_000L, 3200),    // 18: 160.0 ms, ISO 3200 (~6 fps repeating limit)
+        PreviewStep(200_000_000L, 4000),    // 19: 200.0 ms, ISO 4000 (single-frame chain starts)
+        PreviewStep(250_000_000L, 5000),    // 20: 250.0 ms, ISO 5000
+        PreviewStep(320_000_000L, 6400),    // 21: 320.0 ms, ISO 6400
+        PreviewStep(500_000_000L, 6400),    // 22: 500.0 ms, ISO 6400
+        PreviewStep(800_000_000L, 6400),    // 23: 800.0 ms, ISO 6400
+        PreviewStep(1_200_000_000L, 6400)   // 24: 1.20 s, ISO 6400 (24x brighter than 100ms@3200)
     )
 
     const val DEFAULT_STEP_INDEX = 17 // Starts at 100 ms @ ISO 3200
+
+    /**
+     * Above 160 ms, preview switches from multi-buffered setRepeatingRequest (which queues 3-4
+     * long exposures in the HAL) to single-frame capture chaining (queue depth = 1) so camera
+     * switching and controls remain responsive without multi-second pipeline stalls.
+     */
+    const val LONG_EXPOSURE_CHAIN_THRESHOLD_NS = 160_000_000L
 
     // Intentionally overexposed target band (0..255) so dim stars and nebulae pop for easy framing.
     // The 1.50x deadband width exceeds a single ~1.23x gamma step to prevent hunting/oscillation.

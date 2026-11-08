@@ -108,11 +108,14 @@ class AstroLogicTest {
         assertTrue(steps.size >= 20)
 
         // Verify strictly increasing total exposure (exposureTimeNs * iso) across the entire ladder
+        // and ensure maximum per-frame preview exposure is capped <= 1.2s for responsive lens switching
         for (i in 1 until steps.size) {
             val prevTotal = steps[i - 1].exposureTimeNs.toDouble() * steps[i - 1].iso
             val currTotal = steps[i].exposureTimeNs.toDouble() * steps[i].iso
             assertTrue("Step $i must exceed step ${i - 1}", currTotal > prevTotal)
+            assertTrue("Preview exposure must stay <= 1.2s", steps[i].exposureTimeNs <= 1_200_000_000L)
         }
+        assertEquals(160_000_000L, com.avaruus.astro.camera.PreviewAutoExposure.LONG_EXPOSURE_CHAIN_THRESHOLD_NS)
 
         // Dark sky frame -> steps UP by exactly +1 step
         val darkStats = com.avaruus.astro.camera.PreviewAutoExposure.FrameLuminanceStats(
