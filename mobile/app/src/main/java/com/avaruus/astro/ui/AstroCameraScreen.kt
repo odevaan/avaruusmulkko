@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -91,51 +92,22 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
             }
         )
 
-        // 2. Power-Saving Screen Dimmer while Camera is Exposing
-        val shouldDimScreen = isCapturing && !userTemporarilyWokeDimmer
-        if (shouldDimScreen) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(AstroBlack.copy(alpha = 0.92f))
-                    .clickable { userTemporarilyWokeDimmer = true },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+        // 2. Tap anywhere outside buttons/sliders to toggle UI visibility on/off
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(CircleShape)
-                            .background(AstroRed)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "EXPOSING FRAME",
-                        color = AstroTextPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    )
-                    Text(
-                        text = "Screen dimmed for power saving",
-                        color = AstroTextDim,
-                        fontSize = 13.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Tap to view controls",
-                        color = AstroTextSecondary,
-                        fontSize = 12.sp
-                    )
+                    isUiMinimized = !isUiMinimized
                 }
-            }
-        }
+        )
 
-        // 3. Minimized UI Floating Capsule (when UI is minimized)
-        if (isUiMinimized) {
+        val shouldDimScreen = isCapturing && !userTemporarilyWokeDimmer
+
+        // 3. Compact Sequence Status Pill when UI is hidden during an active sequence
+        if (isUiMinimized && seqState.isRunning && !shouldDimScreen) {
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -146,34 +118,20 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (seqState.isRunning) {
-                    Text(
-                        text = "${settings.mode.name} ${seqState.currentFrameIndex}/${if (seqState.targetFrames == 0) "∞" else seqState.targetFrames}",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Button(
-                        onClick = { viewModel.stopSequencer() },
-                        colors = ButtonDefaults.buttonColors(containerColor = AstroSurfaceElevated),
-                        shape = RoundedCornerShape(16.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.height(36.dp)
-                    ) {
-                        Text("STOP", color = AstroRed, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-
+                Text(
+                    text = "${settings.mode.name} ${seqState.currentFrameIndex}/${if (seqState.targetFrames == 0) "∞" else seqState.targetFrames}",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
                 Button(
-                    onClick = { isUiMinimized = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = AstroRedDark),
+                    onClick = { viewModel.stopSequencer() },
+                    colors = ButtonDefaults.buttonColors(containerColor = AstroSurfaceElevated),
                     shape = RoundedCornerShape(16.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     modifier = Modifier.height(36.dp)
                 ) {
-                    Icon(Icons.Default.Menu, contentDescription = "Show UI", tint = Color.White, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("SHOW UI", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("STOP", color = AstroRed, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -191,7 +149,7 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // TOP BAR: Mode Selector Dropdown, Lens Pills, Loupe, and Minimize UI Button
+                // TOP BAR: Mode Selector Dropdown, Camera Dropdown, and Focus Loupe
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -339,21 +297,6 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                             }
                         }
                     }
-
-                    // MINIMIZE UI Button
-                    IconButton(
-                        onClick = { isUiMinimized = true },
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(AstroSurfaceElevated, RoundedCornerShape(8.dp))
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.VisibilityOff,
-                            contentDescription = "Minimize UI",
-                            tint = AstroTextPrimary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
                 }
 
                 // BOTTOM CONTROLS PANEL: Sliders & Actions
@@ -450,7 +393,7 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                             Slider(
                                 value = currentExpIdx.toFloat(),
                                 onValueChange = { idx ->
-                                    val targetVal = EXPOSURE_VALUES_SEC[idx.toInt().coerceIn(0, EXPOSURE_VALUES_SEC.size - 1)]
+                                    val targetVal = EXPOSURE_VALUES_SEC[kotlin.math.round(idx).toInt().coerceIn(0, EXPOSURE_VALUES_SEC.size - 1)]
                                     viewModel.setExposureTimeNs((targetVal * 1_000_000_000L).toLong())
                                 },
                                 valueRange = 0f..(EXPOSURE_VALUES_SEC.size - 1).toFloat(),
@@ -515,7 +458,7 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                                 }
                                 Slider(
                                     value = selectedShotsIndex.toFloat(),
-                                    onValueChange = { selectedShotsIndex = it.toInt() },
+                                    onValueChange = { selectedShotsIndex = kotlin.math.round(it).toInt() },
                                     valueRange = 0f..(SHOT_COUNT_VALUES.size - 1).toFloat(),
                                     steps = SHOT_COUNT_VALUES.size - 2,
                                     colors = SliderDefaults.colors(
@@ -537,7 +480,7 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                                 }
                                 Slider(
                                     value = delaySec.toFloat(),
-                                    onValueChange = { delaySec = it.toInt() },
+                                    onValueChange = { delaySec = kotlin.math.round(it).toInt() },
                                     valueRange = 0f..10f,
                                     steps = 9,
                                     colors = SliderDefaults.colors(
@@ -622,6 +565,54 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                             )
                         }
                     }
+                }
+            }
+        }
+
+        // 5. Power-Saving Screen Dimmer while Camera is Exposing (top-most layer)
+        if (shouldDimScreen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(AstroBlack.copy(alpha = 0.92f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        userTemporarilyWokeDimmer = true
+                        isUiMinimized = false
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clip(CircleShape)
+                            .background(AstroRed)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "EXPOSING FRAME",
+                        color = AstroTextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        text = "Screen dimmed for power saving",
+                        color = AstroTextDim,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Tap to view controls",
+                        color = AstroTextSecondary,
+                        fontSize = 12.sp
+                    )
                 }
             }
         }

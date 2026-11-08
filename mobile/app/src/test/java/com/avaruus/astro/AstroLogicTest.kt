@@ -101,4 +101,76 @@ class AstroLogicTest {
         assertTrue(AstroDefaults.ISO_PRESETS.contains(1600))
         assertTrue(AstroDefaults.ISO_PRESETS.contains(3200))
     }
+
+    @Test
+    fun testPreviewAutoExposureStepsMonotonicAndSingleStep() {
+        val steps = com.avaruus.astro.camera.PreviewAutoExposure.STEPS
+        assertTrue(steps.size >= 20)
+
+        // Verify strictly increasing total exposure (exposureTimeNs * iso) across the entire ladder
+        for (i in 1 until steps.size) {
+            val prevTotal = steps[i - 1].exposureTimeNs.toDouble() * steps[i - 1].iso
+            val currTotal = steps[i].exposureTimeNs.toDouble() * steps[i].iso
+            assertTrue("Step $i must exceed step ${i - 1}", currTotal > prevTotal)
+        }
+
+        // Dark sky frame -> steps UP by exactly +1 step
+        val darkStats = com.avaruus.astro.camera.PreviewAutoExposure.FrameLuminanceStats(
+            meanY = 12f,
+            p90Y = 22f,
+            clippedFraction = 0.005f
+        )
+        assertEquals(18, com.avaruus.astro.camera.PreviewAutoExposure.nextStepIndex(17, darkStats))
+
+        // Overly washed-out frame -> steps DOWN by exactly -1 step
+        val brightStats = com.avaruus.astro.camera.PreviewAutoExposure.FrameLuminanceStats(
+            meanY = 185f,
+            p90Y = 235f,
+            clippedFraction = 0.40f
+        )
+        assertEquals(16, com.avaruus.astro.camera.PreviewAutoExposure.nextStepIndex(17, brightStats))
+
+        // Intentionally overexposed framing sweet spot -> holds steady (+0 steps)
+        val sweetSpotStats = com.avaruus.astro.camera.PreviewAutoExposure.FrameLuminanceStats(
+            meanY = 120f,
+            p90Y = 155f,
+            clippedFraction = 0.03f
+        )
+        assertEquals(17, com.avaruus.astro.camera.PreviewAutoExposure.nextStepIndex(17, sweetSpotStats))
+
+        // Boundary clamping
+        assertEquals(0, com.avaruus.astro.camera.PreviewAutoExposure.nextStepIndex(0, brightStats))
+        assertEquals(
+            steps.lastIndex,
+            com.avaruus.astro.camera.PreviewAutoExposure.nextStepIndex(steps.lastIndex, darkStats)
+        )
+    }
+
+    @Test
+    fun testAnalyzeYPlaneWithRowPadding() {
+        val width = 32
+        val height = 24
+        val rowStride = 40 // includes 8 bytes of row padding
+        val buffer = java.nio.ByteBuffer.allocate(rowStride * height)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                // Top 25% of rows are bright stars/nebula (250), remaining 75% are lifted sky (100)
+                val luma = if (y < height / 4) 250 else 100
+                buffer.put(y * rowStride + x, luma.toByte())
+            }
+        }
+
+        val stats = com.avaruus.astro.camera.PreviewAutoExposure.analyzeYPlane(
+            buffer = buffer,
+            width = width,
+            height = height,
+            rowStride = rowStride,
+            pixelStride = 1
+        )
+        assertNotNull(stats)
+        // 0.25 * 250 + 0.75 * 100 = 137.5
+        assertEquals(137.5f, stats!!.meanY, 0.5f)
+        assertEquals(250f, stats.p90Y, 0.5f)
+        assertEquals(0.25f, stats.clippedFraction, 0.02f)
+    }
 }

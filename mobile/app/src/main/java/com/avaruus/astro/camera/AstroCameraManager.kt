@@ -38,7 +38,25 @@ class AstroCameraManager(private val context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var rawImageReader: ImageReader? = null
+    private var previewAnalysisReader: ImageReader? = null
     private var previewSurface: Surface? = null
+
+    @Volatile
+    private var includeAnalysisInSession: Boolean = true
+
+    @Volatile
+    private var currentPreviewStepIndex: Int = PreviewAutoExposure.DEFAULT_STEP_INDEX
+
+    @Volatile
+    private var previewGeneration: Long = 0L
+
+    @Volatile
+    private var activeGenerationLanded: Boolean = false
+
+    @Volatile
+    private var lastAeEvalTimeMs: Long = 0L
+
+    private val histogramScratch = IntArray(256)
 
     private val cameraOpenCloseLock = Semaphore(1)
 
@@ -266,6 +284,7 @@ class AstroCameraManager(private val context: Context) {
                 captureSession?.close()
                 captureSession = null
                 setupRawImageReader(device.id, lens)
+                setupPreviewAnalysisReader(device.id, lens)
                 createCaptureSession(device, previewSurface, lens)
                 return
             } catch (e: Exception) {
@@ -282,12 +301,9 @@ class AstroCameraManager(private val context: Context) {
         updatePreviewRepeating()
     }
 
-    private fun setupRawImageReader(logicalCameraId: String, lens: CameraLens?) {
-        rawImageReader?.close()
-        rawImageReader = null
-
+    private fun getActiveLensCharacteristics(logicalCameraId: String, lens: CameraLens?): CameraCharacteristics {
         val pId = lens?.physicalCameraId
-        val chars = if (!pId.isNullOrEmpty()) {
+        return if (!pId.isNullOrEmpty()) {
             try {
                 cameraManager.getCameraCharacteristics(pId)
             } catch (e: Exception) {
@@ -296,7 +312,13 @@ class AstroCameraManager(private val context: Context) {
         } else {
             cameraManager.getCameraCharacteristics(logicalCameraId)
         }
+    }
 
+    private fun setupRawImageReader(logicalCameraId: String, lens: CameraLens?) {
+        rawImageReader?.close()
+        rawImageReader = null
+
+        val chars = getActiveLensCharacteristics(logicalCameraId, lens)
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val rawSizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
         val rawSize = rawSizes?.maxByOrNull { it.width * it.height }
@@ -312,6 +334,34 @@ class AstroCameraManager(private val context: Context) {
         )
     }
 
+    private fun setupPreviewAnalysisReader(logicalCameraId: String, lens: CameraLens?) {
+        previewAnalysisReader?.close()
+        previewAnalysisReader = null
+
+        val chars = getActiveLensCharacteristics(logicalCameraId, lens)
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
+        val targetArea = 320 * 240
+        val analysisSize = yuvSizes
+            ?.filter { it.width in 160..640 && it.height >= 120 }
+            ?.minByOrNull { kotlin.math.abs(it.width * it.height - targetArea) }
+            ?: yuvSizes?.minByOrNull { it.width * it.height }
+            ?: Size(320, 240)
+
+        Log.i(TAG, "Setting up Preview AE YUV ImageReader: ${analysisSize.width}x${analysisSize.height}")
+
+        previewAnalysisReader = ImageReader.newInstance(
+            analysisSize.width,
+            analysisSize.height,
+            ImageFormat.YUV_420_888,
+            2
+        ).apply {
+            setOnImageAvailableListener({ reader ->
+                onPreviewFrameAvailable(reader)
+            }, cameraHandler)
+        }
+    }
+
     @SuppressLint("MissingPermission")
     fun openCamera(cameraId: String, surface: Surface) {
         this.previewSurface = surface
@@ -324,6 +374,7 @@ class AstroCameraManager(private val context: Context) {
 
             val targetLens = _currentLens.value
             setupRawImageReader(cameraId, targetLens)
+            setupPreviewAnalysisReader(cameraId, targetLens)
 
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
@@ -354,15 +405,18 @@ class AstroCameraManager(private val context: Context) {
 
     private fun createCaptureSession(camera: CameraDevice, surface: Surface, lens: CameraLens?) {
         val reader = rawImageReader ?: return
+        val analysisReader = previewAnalysisReader
         try {
             val previewConfig = OutputConfiguration(surface)
             val rawConfig = OutputConfiguration(reader.surface)
+            val analysisConfig = analysisReader?.let { OutputConfiguration(it.surface) }
 
             val physicalId = lens?.physicalCameraId
             if (!physicalId.isNullOrEmpty()) {
                 try {
                     previewConfig.setPhysicalCameraId(physicalId)
                     rawConfig.setPhysicalCameraId(physicalId)
+                    analysisConfig?.setPhysicalCameraId(physicalId)
                     Log.i(TAG, "Configuring session with physical camera ID: $physicalId")
                 } catch (e: Throwable) {
                     Log.w(TAG, "Could not set physical camera ID $physicalId", e)
@@ -373,15 +427,22 @@ class AstroCameraManager(private val context: Context) {
                 cameraHandler?.post(command) ?: command.run()
             }
 
+            val outputConfigs = buildList {
+                add(previewConfig)
+                if (analysisConfig != null) add(analysisConfig)
+                add(rawConfig)
+            }
+
             val sessionConfig = SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
-                listOf(previewConfig, rawConfig),
+                outputConfigs,
                 cameraExecutor,
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         if (cameraDevice == null) return
                         captureSession = session
-                        Log.i(TAG, "Capture session configured successfully for ${lens?.name}")
+                        includeAnalysisInSession = analysisConfig != null
+                        Log.i(TAG, "Capture session configured successfully for ${lens?.name} (AE stream=$includeAnalysisInSession)")
                         updatePreviewRepeating()
                     }
 
@@ -400,6 +461,7 @@ class AstroCameraManager(private val context: Context) {
 
     private fun fallbackStandardSession(camera: CameraDevice, preview: Surface, rawSurface: Surface) {
         try {
+            includeAnalysisInSession = false
             val surfaces = listOf(preview, rawSurface)
             @Suppress("DEPRECATION")
             camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
@@ -418,8 +480,70 @@ class AstroCameraManager(private val context: Context) {
         }
     }
 
+    private val previewCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult
+        ) {
+            val tagGen = request.tag as? Long
+            if (tagGen != null && tagGen == previewGeneration) {
+                activeGenerationLanded = true
+            }
+        }
+    }
+
+    private fun onPreviewFrameAvailable(reader: ImageReader) {
+        val image = try {
+            reader.acquireLatestImage()
+        } catch (e: Exception) {
+            null
+        } ?: return
+
+        try {
+            if (_isCapturing.value || !activeGenerationLanded) {
+                return
+            }
+
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastAeEvalTimeMs < 180L) {
+                return
+            }
+            lastAeEvalTimeMs = now
+
+            val plane = image.planes.firstOrNull() ?: return
+            val stats = PreviewAutoExposure.analyzeYPlane(
+                buffer = plane.buffer,
+                width = image.width,
+                height = image.height,
+                rowStride = plane.rowStride,
+                pixelStride = plane.pixelStride,
+                histogramScratch = histogramScratch
+            ) ?: return
+
+            val currentIdx = currentPreviewStepIndex
+            val nextIdx = PreviewAutoExposure.nextStepIndex(currentIdx, stats)
+            if (nextIdx != currentIdx) {
+                currentPreviewStepIndex = nextIdx
+                activeGenerationLanded = false
+                val nextStep = PreviewAutoExposure.STEPS[nextIdx]
+                Log.d(
+                    TAG,
+                    "Preview AE step $currentIdx -> $nextIdx (${nextStep.exposureTimeNs / 1_000_000.0}ms, ISO ${nextStep.iso}) " +
+                        "[meanY=${"%.1f".format(stats.meanY)}, p90Y=${"%.1f".format(stats.p90Y)}, clip=${"%.2f".format(stats.clippedFraction)}]"
+                )
+                updatePreviewRepeating()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Preview AE frame evaluation error", e)
+        } finally {
+            image.close()
+        }
+    }
+
     /**
-     * Sets preview parameters for live viewfinder and focus assist.
+     * Sets preview parameters for live viewfinder and focus assist using closed-loop step AE
+     * targeting a brightly overexposed image for easy star and nebula framing.
      */
     private fun updatePreviewRepeating() {
         val session = captureSession ?: return
@@ -429,26 +553,53 @@ class AstroCameraManager(private val context: Context) {
         try {
             val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
             builder.addTarget(surface)
+            if (includeAnalysisInSession) {
+                previewAnalysisReader?.surface?.let { analysisSurface ->
+                    if (analysisSurface.isValid) {
+                        builder.addTarget(analysisSurface)
+                    }
+                }
+            }
+
+            val gen = ++previewGeneration
+            activeGenerationLanded = false
+            builder.setTag(gen)
 
             val current = _settings.value
+            val lensChars = getActiveLensCharacteristics(device.id, current.lens)
 
             // Set manual focus distance (0.0f = infinity)
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, current.focusDistance)
 
-            // For preview, we use auto or high-gain manual so the user can see stars in viewfinder
+            // Step-based preview auto-exposure: intentionally overexposed so stars & nebulae pop clearly
+            val previewStep = PreviewAutoExposure.STEPS[
+                currentPreviewStepIndex.coerceIn(0, PreviewAutoExposure.STEPS.lastIndex)
+            ]
+            val expRange = lensChars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            val isoRange = lensChars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            val safeExpNs = if (expRange != null) {
+                previewStep.exposureTimeNs.coerceIn(expRange.lower, expRange.upper)
+            } else {
+                previewStep.exposureTimeNs
+            }
+            val safeIso = if (isoRange != null) {
+                previewStep.iso.coerceIn(isoRange.lower, isoRange.upper)
+            } else {
+                previewStep.iso
+            }
+
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            // Preview exposure limited to 1/10s (100ms) for responsive 10fps preview
-            val previewExp = minOf(current.exposureTimeNs, 100_000_000L)
-            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExp)
-            builder.set(CaptureRequest.SENSOR_SENSITIVITY, maxOf(current.iso, 3200)) // boosted preview gain
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, safeExpNs)
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, safeIso)
+            builder.set(CaptureRequest.SENSOR_FRAME_DURATION, maxOf(safeExpNs, 33_333_333L))
 
             // OIS off for astronomy on mount/tripod
             builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
 
             // Select physical optical camera via native optical zoom ratio (0.5x, 1.0x, 5.0x) coerced safely to device range
-            val chars = cameraManager.getCameraCharacteristics(device.id)
-            val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            val logicalChars = cameraManager.getCameraCharacteristics(device.id)
+            val zoomRange = logicalChars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
             val targetRatio = current.lens?.opticalZoomRatio ?: 1.0f
             if (zoomRange != null) {
                 val safeRatio = targetRatio.coerceIn(zoomRange.lower, zoomRange.upper)
@@ -457,7 +608,7 @@ class AstroCameraManager(private val context: Context) {
 
             // Digital zoom loupe preview if set
             if (current.zoomFactor > 1.0f) {
-                val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                val sensorRect = lensChars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
                 if (sensorRect != null) {
                     val cropW = (sensorRect.width() / current.zoomFactor).toInt()
                     val cropH = (sensorRect.height() / current.zoomFactor).toInt()
@@ -468,7 +619,7 @@ class AstroCameraManager(private val context: Context) {
                 }
             }
 
-            session.setRepeatingRequest(builder.build(), null, cameraHandler)
+            session.setRepeatingRequest(builder.build(), previewCaptureCallback, cameraHandler)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to update preview request", e)
         }
@@ -654,6 +805,8 @@ class AstroCameraManager(private val context: Context) {
             cameraDevice = null
             rawImageReader?.close()
             rawImageReader = null
+            previewAnalysisReader?.close()
+            previewAnalysisReader = null
         } catch (e: Exception) {
             Log.e(TAG, "Error closing camera", e)
         } finally {
