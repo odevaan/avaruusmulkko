@@ -2,6 +2,7 @@ package com.avaruus.astro.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
 import android.hardware.camera2.params.OutputConfiguration
@@ -68,6 +69,10 @@ class AstroCameraManager(private val context: Context) {
     private var lastSinglePreviewRequest: CaptureRequest? = null
 
     private val histogramScratch = IntArray(256)
+    private val binningWorkspace = PreviewAutoExposure.BinningWorkspace()
+
+    @Volatile
+    private var displayRotationDeg: Int = 0
 
     @Volatile
     private var pendingLensSwitch: Pair<CameraLens, Surface>? = null
@@ -86,6 +91,12 @@ class AstroCameraManager(private val context: Context) {
 
     private val _isCapturing = MutableStateFlow(false)
     val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
+
+    private val _binnedPreviewBitmap = MutableStateFlow<Bitmap?>(null)
+    val binnedPreviewBitmap: StateFlow<Bitmap?> = _binnedPreviewBitmap.asStateFlow()
+
+    private val _currentBinFactor = MutableStateFlow(1)
+    val currentBinFactor: StateFlow<Int> = _currentBinFactor.asStateFlow()
 
     private var currentSessionDir: File? = null
 
@@ -387,14 +398,20 @@ class AstroCameraManager(private val context: Context) {
         cameraHandler.post(coalescedSelectLensRunnable)
     }
 
+    fun setDisplayRotationDegrees(deg: Int) {
+        displayRotationDeg = deg
+    }
+
     private fun selectLensInternal(lens: CameraLens, surface: Surface) {
         if (!surface.isValid) return
         this.previewSurface = surface
 
-        // Reset preview AE to responsive 100ms step if currently in a long dark-sky step so new lens starts immediately
+        // Reset preview AE to responsive 100ms 1x1 step on lens switch
         if (currentPreviewStepIndex > PreviewAutoExposure.DEFAULT_STEP_INDEX) {
             currentPreviewStepIndex = PreviewAutoExposure.DEFAULT_STEP_INDEX
         }
+        _currentBinFactor.value = 1
+        _binnedPreviewBitmap.value = null
 
         cancelPreviewChainCallbacks()
         sessionEpoch++
@@ -467,16 +484,20 @@ class AstroCameraManager(private val context: Context) {
         } else {
             4f / 3f
         }
-        val targetArea = 320 * 240
-        val smallYuv = yuvSizes?.filter { it.width in 160..640 && it.height >= 120 }
-        val analysisSize = smallYuv
-            ?.filter { kotlin.math.abs((it.width.toFloat() / it.height.toFloat()) - sensorAspect) <= 0.03f }
-            ?.minByOrNull { kotlin.math.abs(it.width * it.height - targetArea) }
-            ?: smallYuv?.minByOrNull { kotlin.math.abs(it.width * it.height - targetArea) }
-            ?: yuvSizes?.minByOrNull { it.width * it.height }
-            ?: Size(320, 240)
+        // Choose a 4:3 YUV_420_888 resolution (preferring 640..1440 width divisible by 12 so 2x2, 3x3, and 4x4 divide evenly)
+        val aspectMatched = yuvSizes
+            ?.filter {
+                it.width in 480..1440 &&
+                    it.height in 360..1080 &&
+                    kotlin.math.abs((it.width.toFloat() / it.height.toFloat()) - sensorAspect) <= 0.03f
+            }
+        val divisibleBy12 = aspectMatched?.filter { it.width % 12 == 0 && it.height % 12 == 0 }
+        val analysisSize = divisibleBy12?.maxByOrNull { it.width * it.height }
+            ?: aspectMatched?.maxByOrNull { it.width * it.height }
+            ?: yuvSizes?.filter { it.width <= 1440 && it.height <= 1080 }?.maxByOrNull { it.width * it.height }
+            ?: Size(960, 720)
 
-        Log.i(TAG, "Setting up Preview AE YUV ImageReader: ${analysisSize.width}x${analysisSize.height}")
+        Log.i(TAG, "Setting up Preview Binning/AE YUV ImageReader: ${analysisSize.width}x${analysisSize.height}")
 
         previewAnalysisReader = ImageReader.newInstance(
             analysisSize.width,
@@ -739,38 +760,92 @@ class AstroCameraManager(private val context: Context) {
                 return
             }
 
+            val currentIdx = currentPreviewStepIndex.coerceIn(0, PreviewAutoExposure.STEPS.lastIndex)
+            val currentStep = PreviewAutoExposure.STEPS[currentIdx]
+            val activeBin = currentStep.binFactor
+            val planes = image.planes
+            val yPlane = planes.firstOrNull() ?: return
+
+            val stats: PreviewAutoExposure.FrameLuminanceStats
+            if (activeBin >= 2) {
+                val uPlane = planes.getOrNull(1)
+                val vPlane = planes.getOrNull(2)
+                val sensorOrientation = _currentLens.value?.sensorOrientation ?: 90
+                val rotDeg = ((sensorOrientation - displayRotationDeg) % 360 + 360) % 360
+
+                val binnedResult = PreviewAutoExposure.binYuvFrameToArgb(
+                    yBuffer = yPlane.buffer,
+                    uBuffer = uPlane?.buffer,
+                    vBuffer = vPlane?.buffer,
+                    width = image.width,
+                    height = image.height,
+                    yRowStride = yPlane.rowStride,
+                    yPixelStride = yPlane.pixelStride,
+                    uvRowStride = uPlane?.rowStride ?: 0,
+                    uvPixelStride = uPlane?.pixelStride ?: 1,
+                    binFactor = activeBin,
+                    rotationDeg = rotDeg,
+                    workspace = binningWorkspace
+                ) ?: return
+
+                val bmp = Bitmap.createBitmap(
+                    binningWorkspace.outArgb,
+                    0,
+                    binnedResult.outWidth,
+                    binnedResult.outWidth,
+                    binnedResult.outHeight,
+                    Bitmap.Config.ARGB_8888
+                )
+                _currentBinFactor.value = activeBin
+                _binnedPreviewBitmap.value = bmp
+                stats = binnedResult.stats
+            } else {
+                if (_currentBinFactor.value != 1 || _binnedPreviewBitmap.value != null) {
+                    _currentBinFactor.value = 1
+                    _binnedPreviewBitmap.value = null
+                }
+                val nowCheck = SystemClock.elapsedRealtime()
+                if (!isUsingSinglePreviewChain && nowCheck - lastAeEvalTimeMs < 180L) {
+                    return
+                }
+                stats = PreviewAutoExposure.analyzeYPlane(
+                    buffer = yPlane.buffer,
+                    width = image.width,
+                    height = image.height,
+                    rowStride = yPlane.rowStride,
+                    pixelStride = yPlane.pixelStride,
+                    histogramScratch = histogramScratch
+                ) ?: return
+            }
+
             val now = SystemClock.elapsedRealtime()
             if (!isUsingSinglePreviewChain && now - lastAeEvalTimeMs < 180L) {
                 return
             }
             lastAeEvalTimeMs = now
-
-            val plane = image.planes.firstOrNull() ?: return
-            val stats = PreviewAutoExposure.analyzeYPlane(
-                buffer = plane.buffer,
-                width = image.width,
-                height = image.height,
-                rowStride = plane.rowStride,
-                pixelStride = plane.pixelStride,
-                histogramScratch = histogramScratch
-            ) ?: return
-
             singlePreviewImageEvaluated = true
 
-            val currentIdx = currentPreviewStepIndex
             val nextIdx = PreviewAutoExposure.nextStepIndex(currentIdx, stats)
             if (nextIdx != currentIdx) {
                 currentPreviewStepIndex = nextIdx
-                acceptedGenStartTimestamp = Long.MAX_VALUE
                 val nextStep = PreviewAutoExposure.STEPS[nextIdx]
+                _currentBinFactor.value = nextStep.binFactor
+                if (nextStep.binFactor == 1) {
+                    _binnedPreviewBitmap.value = null
+                }
                 Log.d(
                     TAG,
-                    "Preview AE step $currentIdx -> $nextIdx (${nextStep.exposureTimeNs / 1_000_000.0}ms, ISO ${nextStep.iso}) " +
+                    "Preview AE step $currentIdx -> $nextIdx (${nextStep.exposureTimeNs / 1_000_000.0}ms, ISO ${nextStep.iso}, bin ${nextStep.binFactor}x${nextStep.binFactor}) " +
                         "[meanY=${"%.1f".format(stats.meanY)}, p90Y=${"%.1f".format(stats.p90Y)}, clip=${"%.2f".format(stats.clippedFraction)}]"
                 )
-                if (!isUsingSinglePreviewChain) {
-                    updatePreviewInternal()
-                    return
+                val sensorParamsChanged =
+                    nextStep.exposureTimeNs != currentStep.exposureTimeNs || nextStep.iso != currentStep.iso
+                if (sensorParamsChanged) {
+                    acceptedGenStartTimestamp = Long.MAX_VALUE
+                    if (!isUsingSinglePreviewChain) {
+                        updatePreviewInternal()
+                        return
+                    }
                 }
             }
 
@@ -1084,6 +1159,8 @@ class AstroCameraManager(private val context: Context) {
         if (currentPreviewStepIndex > PreviewAutoExposure.DEFAULT_STEP_INDEX) {
             currentPreviewStepIndex = PreviewAutoExposure.DEFAULT_STEP_INDEX
         }
+        _currentBinFactor.value = 1
+        _binnedPreviewBitmap.value = null
         cancelPreviewChainCallbacks()
         try {
             tearDownCurrentSessionInternal()

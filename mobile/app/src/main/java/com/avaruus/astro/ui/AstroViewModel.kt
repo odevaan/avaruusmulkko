@@ -1,6 +1,7 @@
 package com.avaruus.astro.ui
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.os.Environment
 import android.view.Surface
 import androidx.lifecycle.AndroidViewModel
@@ -27,6 +28,8 @@ class AstroViewModel(application: Application) : AndroidViewModel(application) {
     val settings: StateFlow<CaptureSettings> = cameraManager.settings
     val isCapturing: StateFlow<Boolean> = cameraManager.isCapturing
     val lastCapturedFile: StateFlow<File?> = cameraManager.lastCapturedFile
+    val binnedPreviewBitmap: StateFlow<Bitmap?> = cameraManager.binnedPreviewBitmap
+    val currentBinFactor: StateFlow<Int> = cameraManager.currentBinFactor
 
     private val _capturedFiles = MutableStateFlow<List<File>>(emptyList())
     val capturedFiles: StateFlow<List<File>> = _capturedFiles.asStateFlow()
@@ -57,6 +60,10 @@ class AstroViewModel(application: Application) : AndroidViewModel(application) {
         activeSurface?.let { surface ->
             cameraManager.selectLens(lens, surface)
         }
+    }
+
+    fun setDisplayRotationDegrees(deg: Int) {
+        cameraManager.setDisplayRotationDegrees(deg)
     }
 
     fun setMode(mode: AstroMode) {

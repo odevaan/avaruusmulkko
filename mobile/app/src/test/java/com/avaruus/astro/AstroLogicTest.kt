@@ -107,15 +107,19 @@ class AstroLogicTest {
         val steps = com.avaruus.astro.camera.PreviewAutoExposure.STEPS
         assertTrue(steps.size >= 20)
 
-        // Verify strictly increasing total exposure (exposureTimeNs * iso) across the entire ladder
-        // and ensure maximum per-frame preview exposure is capped <= 1.2s for responsive lens switching
+        // Verify strictly increasing total exposure weight (exposureTimeNs * iso * binFactor^2)
+        // and ensure preview exposure time NEVER exceeds 100ms (10 fps) thanks to 2x2, 3x3, 4x4 binning
         for (i in 1 until steps.size) {
-            val prevTotal = steps[i - 1].exposureTimeNs.toDouble() * steps[i - 1].iso
-            val currTotal = steps[i].exposureTimeNs.toDouble() * steps[i].iso
+            val prevTotal = steps[i - 1].totalExposureWeight
+            val currTotal = steps[i].totalExposureWeight
             assertTrue("Step $i must exceed step ${i - 1}", currTotal > prevTotal)
-            assertTrue("Preview exposure must stay <= 1.2s", steps[i].exposureTimeNs <= 1_200_000_000L)
+            assertTrue("Preview exposure must stay <= 100ms", steps[i].exposureTimeNs <= 100_000_000L)
         }
-        assertEquals(160_000_000L, com.avaruus.astro.camera.PreviewAutoExposure.LONG_EXPOSURE_CHAIN_THRESHOLD_NS)
+        assertEquals(1, steps[17].binFactor)
+        assertEquals(2, steps[18].binFactor)
+        assertEquals(3, steps[19].binFactor)
+        assertEquals(4, steps[20].binFactor)
+        assertEquals(4, steps[21].binFactor)
 
         // Dark sky frame -> steps UP by exactly +1 step
         val darkStats = com.avaruus.astro.camera.PreviewAutoExposure.FrameLuminanceStats(
@@ -204,5 +208,105 @@ class AstroLogicTest {
         // Periscope sensor mounted at 270° in portrait (0°) -> also 3:4 (0.75)
         val lens270 = lens90.copy(sensorOrientation = 270)
         assertEquals(0.75f, lens270.displayAspectRatio(0), 0.001f)
+    }
+
+    @Test
+    fun testBinYuvFrameAccuracyAndBenchmark() {
+        val width = 1440
+        val height = 1080
+        val yBuffer = java.nio.ByteBuffer.allocateDirect(width * height)
+        val uBuffer = java.nio.ByteBuffer.allocateDirect((width / 2) * (height / 2))
+        val vBuffer = java.nio.ByteBuffer.allocateDirect((width / 2) * (height / 2))
+
+        // Populate a dim night sky frame where each pixel has Y = 10
+        for (i in 0 until width * height) {
+            yBuffer.put(i, 10.toByte())
+        }
+        for (i in 0 until (width / 2) * (height / 2)) {
+            uBuffer.put(i, 128.toByte())
+            vBuffer.put(i, 128.toByte())
+        }
+
+        val workspace = com.avaruus.astro.camera.PreviewAutoExposure.BinningWorkspace()
+
+        // Warmup JIT
+        repeat(3) {
+            com.avaruus.astro.camera.PreviewAutoExposure.binYuvFrameToArgb(
+                yBuffer = yBuffer,
+                uBuffer = uBuffer,
+                vBuffer = vBuffer,
+                width = width,
+                height = height,
+                yRowStride = width,
+                yPixelStride = 1,
+                uvRowStride = width / 2,
+                uvPixelStride = 1,
+                binFactor = 2,
+                rotationDeg = 90,
+                workspace = workspace
+            )
+        }
+
+        val res2x2 = com.avaruus.astro.camera.PreviewAutoExposure.binYuvFrameToArgb(
+            yBuffer = yBuffer,
+            uBuffer = uBuffer,
+            vBuffer = vBuffer,
+            width = width,
+            height = height,
+            yRowStride = width,
+            yPixelStride = 1,
+            uvRowStride = width / 2,
+            uvPixelStride = 1,
+            binFactor = 2,
+            rotationDeg = 90,
+            workspace = workspace
+        )!!
+        // 2x2 sum of Y=10 -> 4 * 10 = 40; rotated 90° -> 540x720
+        assertEquals(540, res2x2.outWidth)
+        assertEquals(720, res2x2.outHeight)
+        assertEquals(40f, res2x2.stats.meanY, 0.1f)
+        assertTrue("2x2 binning must be well under 1000ms (was ${res2x2.processingTimeMs}ms)", res2x2.processingTimeMs < 250.0)
+
+        val res3x3 = com.avaruus.astro.camera.PreviewAutoExposure.binYuvFrameToArgb(
+            yBuffer = yBuffer,
+            uBuffer = uBuffer,
+            vBuffer = vBuffer,
+            width = width,
+            height = height,
+            yRowStride = width,
+            yPixelStride = 1,
+            uvRowStride = width / 2,
+            uvPixelStride = 1,
+            binFactor = 3,
+            rotationDeg = 90,
+            workspace = workspace
+        )!!
+        // 3x3 sum of Y=10 -> 9 * 10 = 90; rotated 90° -> 360x480
+        assertEquals(360, res3x3.outWidth)
+        assertEquals(480, res3x3.outHeight)
+        assertEquals(90f, res3x3.stats.meanY, 0.1f)
+        assertTrue("3x3 binning must be well under 1000ms (was ${res3x3.processingTimeMs}ms)", res3x3.processingTimeMs < 250.0)
+
+        val res4x4 = com.avaruus.astro.camera.PreviewAutoExposure.binYuvFrameToArgb(
+            yBuffer = yBuffer,
+            uBuffer = uBuffer,
+            vBuffer = vBuffer,
+            width = width,
+            height = height,
+            yRowStride = width,
+            yPixelStride = 1,
+            uvRowStride = width / 2,
+            uvPixelStride = 1,
+            binFactor = 4,
+            rotationDeg = 90,
+            workspace = workspace
+        )!!
+        // 4x4 sum of Y=10 -> 16 * 10 = 160; rotated 90° -> 270x360
+        assertEquals(270, res4x4.outWidth)
+        assertEquals(360, res4x4.outHeight)
+        assertEquals(160f, res4x4.stats.meanY, 0.1f)
+        assertTrue("4x4 binning must be well under 1000ms (was ${res4x4.processingTimeMs}ms)", res4x4.processingTimeMs < 250.0)
+
+        println("BENCHMARK_RESULTS: 2x2=${"%.2f".format(res2x2.processingTimeMs)}ms, 3x3=${"%.2f".format(res3x3.processingTimeMs)}ms, 4x4=${"%.2f".format(res4x4.processingTimeMs)}ms")
     }
 }

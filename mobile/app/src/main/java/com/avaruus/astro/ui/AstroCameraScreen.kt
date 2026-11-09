@@ -6,6 +6,7 @@ import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -43,6 +47,8 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
     val isCapturing by viewModel.isCapturing.collectAsState()
     val seqState by viewModel.sequencerState.collectAsState()
     val capturedFiles by viewModel.capturedFiles.collectAsState()
+    val binnedPreviewBitmap by viewModel.binnedPreviewBitmap.collectAsState()
+    val currentBinFactor by viewModel.currentBinFactor.collectAsState()
 
     var isUiMinimized by remember { mutableStateOf(false) }
     var modeDropdownExpanded by remember { mutableStateOf(false) }
@@ -75,6 +81,9 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
         Surface.ROTATION_180 -> 180
         Surface.ROTATION_270 -> 270
         else -> 0
+    }
+    LaunchedEffect(displayRotationDeg) {
+        viewModel.setDisplayRotationDegrees(displayRotationDeg)
     }
     val activeLensForAspect = currentLens ?: availableLenses.firstOrNull()
     val previewW = activeLensForAspect?.previewWidth ?: 1440
@@ -128,6 +137,18 @@ fun AstroCameraScreen(viewModel: AstroViewModel) {
                             })
                         }
                     }
+                )
+            }
+
+            // When 2x2, 3x3, or 4x4 additive pixel binning is active on a dark sky, overlay the binned preview frame
+            val activeBinnedBmp = binnedPreviewBitmap
+            if (activeBinnedBmp != null && currentBinFactor >= 2) {
+                Image(
+                    bitmap = remember(activeBinnedBmp) { activeBinnedBmp.asImageBitmap() },
+                    contentDescription = null,
+                    modifier = fittedModifier,
+                    contentScale = ContentScale.FillBounds,
+                    filterQuality = FilterQuality.Low
                 )
             }
         }
